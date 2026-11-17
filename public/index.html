@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2DBattle</title>
+<style>
+:root{--bg:#0d0e13;--panel:#171920;--line:#2a2d38;--text:#e9e9ee;--muted:#9a9cab;--accent:#ffd34d}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;display:flex;flex-direction:column;align-items:center;padding:16px;gap:12px}
+h1{font-size:16px;margin:0;width:100%;max-width:1000px;color:var(--muted);font-weight:600;letter-spacing:.04em}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;width:100%;max-width:1000px}
+.bar .sp{flex:1}
+button{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 14px;font-size:14px;cursor:pointer;font-family:inherit}
+button:hover{border-color:#454a5a}
+button.on{border-color:var(--accent);color:var(--accent)}
+button:disabled{opacity:.35;cursor:default}
+[hidden]{display:none!important}
+input{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:14px;font-family:inherit;width:220px;text-transform:uppercase}
+#netStatus{font-size:13px;color:var(--muted)}
+canvas{width:100%;max-width:1000px;aspect-ratio:1000/560;background:#000;border-radius:10px;display:block;outline:none}
+.help{width:100%;max-width:1000px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:13px;color:var(--muted)}
+.help div{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px;line-height:1.8}
+.help b{color:var(--text);display:block;margin-bottom:4px}
+kbd{background:#242733;border:1px solid #363a48;border-radius:4px;padding:0 5px;font-family:inherit;color:var(--text);font-size:12px}
+@media (max-width:820px){.help{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<h1>2DBattle ― 操作はスマブラ式 × 体力制はスト式</h1>
+<div class="bar">
+  <button data-mode="cpu" class="on">CPU対戦</button>
+  <button data-mode="2p">2P対戦</button>
+  <button data-mode="training">トレーニング</button>
+  <button data-mode="online">オンライン対戦</button>
+  <span class="sp"></span>
+  <button id="btnBoxes">判定表示 OFF <kbd>F2</kbd></button>
+  <button id="btnGuard" class="on" disabled>ダミーガード ON</button>
+  <button id="btnReset">リセット</button>
+</div>
+<div class="bar" id="onlinePanel" hidden>
+  <input id="room" maxlength="12" placeholder="ルームコード（例: TARU1）" autocomplete="off">
+  <button id="btnJoin">入室</button>
+  <span id="netStatus"></span>
+</div>
+<canvas id="cv" width="1000" height="560" tabindex="0"></canvas>
+<div class="help">
+  <div><b>P1（キーボード左側）</b>
+    移動 <kbd>A</kbd><kbd>D</kbd>　ジャンプ <kbd>W</kbd>　しゃがみ <kbd>S</kbd><br>
+    弱 <kbd>J</kbd>　中 <kbd>K</kbd>　強 <kbd>L</kbd><br>
+    技 <kbd>U</kbd>　必殺技 <kbd>I</kbd>（ゲージMAX時）<br>
+    CPU/トレモ/オンラインではどちらのキー配置でも自分を操作できます
+  </div>
+  <div><b>P2（キーボード右側）</b>
+    移動 <kbd>←</kbd><kbd>→</kbd>　ジャンプ <kbd>↑</kbd>　しゃがみ <kbd>↓</kbd><br>
+    弱 <kbd>,</kbd>　中 <kbd>.</kbd>　強 <kbd>/</kbd>　技 <kbd>;</kbd>　必殺 <kbd>:</kbd><br>
+    テンキー: 弱<kbd>1</kbd> 中<kbd>2</kbd> 強<kbd>3</kbd> 技<kbd>4</kbd> 必殺<kbd>5</kbd><br>
+    パッド: X=弱 Y=中 RB=強 A=技 B/LB=必殺
+  </div>
+  <div><b>システム</b>
+    ガード：後ろ入れ（しゃがみガードで下段、立ちで空中技）<br>
+    技：<kbd>技</kbd>＋なし/↓/↑/→ ＝ 波動弾/スライディング/昇竜/突進<br>
+    チェーン：弱→中→強、通常技→技 にキャンセル可<br>
+    必殺技：ゲージMAXで発動、技からもキャンセル可
+  </div>
+</div>
+
+<script src="sim.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
