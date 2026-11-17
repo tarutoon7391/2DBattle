@@ -85,3 +85,6 @@ setInterval(() => {
 }, 25000);
 
 server.listen(PORT, () => console.log(`2DBattle listening on :${PORT}`));
+
+// デプロイの入れ替えやリージョン移動で止められるときは、正常終了として閉じる
+process.on('SIGTERM', () => { for (const ws of wss.clients) ws.terminate(); server.close(() => process.exit(0)); setTimeout(() => process.exit(0), 2000).unref(); });
