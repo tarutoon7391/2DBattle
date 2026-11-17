@@ -4,7 +4,7 @@
   "description": "2D格闘ゲーム（操作はスマブラ式・体力制はスト式）オンライン対戦対応",
   "private": true,
   "main": "server.js",
-  "scripts": { "start": "node server.js", "test": "node test/lockstep.test.js" },
+  "scripts": { "start": "node server.js", "test": "node test/netcode.test.js" },
   "engines": { "node": ">=18" },
   "dependencies": { "ws": "^8.18.0" }
 }

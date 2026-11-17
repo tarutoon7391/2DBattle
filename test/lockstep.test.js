@@ -1,38 +1,33 @@
 'use strict';
-// サーバー経由で2クライアントがランダム入力を流し合い、最終状態が完全一致するかを確認する。
+// サーバー中継で2クライアントがランダム入力を流し合い、状態が完全一致するかを確認する。
 // 使い方: サーバーを起動してから  node test/lockstep.test.js [ws://localhost:3000/ws]
 const fs = require('fs'), path = require('path');
 const WebSocket = require('ws');
+const { createSession } = require('../public/net.js');
 const simSrc = fs.readFileSync(path.join(__dirname, '../public/sim.js'), 'utf8');
 const makeSim = () => new Function(simSrc + ';return{newState,step,cleanInput};')();
 const URL = process.argv[2] || 'ws://localhost:3000/ws';
-const DELAY = 3, FRAMES = 3000, ROOM = 'T' + Date.now().toString(36).toUpperCase();
+const FRAMES = 3000, ROOM = 'T' + Date.now().toString(36).toUpperCase();
 
 function client(seed) {
   return new Promise((resolve, reject) => {
     const sim = makeSim(), ws = new WebSocket(URL);
-    let S = null, you = -1, frame = 0, sent = DELAY - 1, r = seed;
-    const local = {}, remote = {};
+    let S = null, ses = null, r = seed, done = false;
     const rand = () => (r = (r * 16807) % 2147483647);
     const pump = () => {
-      for (;;) {
-        if (frame >= FRAMES) { ws.close(); return resolve(JSON.stringify(S)); }
-        const target = frame + DELAY;
-        if (sent < target) {
-          const b = sim.cleanInput(rand() % 20 < 14 ? rand() % 512 : 0);
-          local[target] = b; sent = target; ws.send(JSON.stringify({ t: 'in', f: target, b }));
-        }
-        const li = frame < DELAY ? 0 : local[frame], ri = frame < DELAY ? 0 : remote[frame];
-        if (ri === undefined) return;
-        sim.step(S, you === 0 ? [li, ri] : [ri, li]); S.events.length = 0; frame++;
-      }
+      if (done) return;
+      while (ses.frame < FRAMES && ses.tick(() => sim.cleanInput(rand() % 20 < 14 ? rand() % 512 : 0), inp => { sim.step(S, inp); S.events.length = 0; }));
+      if (ses.frame >= FRAMES) { done = true; resolve(JSON.stringify(S)); }
     };
     ws.on('open', () => ws.send(JSON.stringify({ t: 'join', room: ROOM })));
     ws.on('message', raw => {
       const m = JSON.parse(raw);
-      if (m.t === 'start') { you = m.you; S = sim.newState('online'); S.rng = m.seed >>> 0; pump(); }
-      else if (m.t === 'in') { remote[m.f] = m.b; if (S) pump(); }
-      else if (m.t === 'left' && frame < FRAMES) reject(new Error('peer left at frame ' + frame));
+      if (m.t === 'start') {
+        S = sim.newState('online'); S.rng = m.seed >>> 0;
+        ses = createSession(m.you, o => ws.readyState === 1 && ws.send(JSON.stringify(o)), () => Date.now());
+        pump();
+      } else if (m.t === 'in') { ses.onMessage(m); pump(); }
+      else if (m.t === 'left' && !done) reject(new Error('peer left at frame ' + ses.frame));
     });
     ws.on('error', reject);
   });

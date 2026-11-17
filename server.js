@@ -1,5 +1,6 @@
 'use strict';
-// 2DBattle サーバー：静的ファイル配信 ＋ 入力を相手に中継するだけの WebSocket。
+// 2DBattle サーバー：静的ファイル配信 ＋ 相手探しと中継だけの WebSocket。
+// 入力は基本ブラウザ同士が直接（WebRTC）送り合い、つながらない回線だけここを中継に使う。
 // ゲームの計算はすべてブラウザ側（public/sim.js）で行う。サーバーは勝敗も状態も持たない。
 const http = require('http');
 const fs = require('fs');
@@ -37,15 +38,16 @@ function leave(ws) {
   for (const other of players) if (other !== ws) { other.room = null; other.peer = null; send(other, { t: 'left' }); }
 }
 
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 256 });
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16384 });
 wss.on('connection', ws => {
   ws.alive = true; ws.room = null; ws.peer = null;
   ws.on('pong', () => { ws.alive = true; });
   ws.on('message', raw => {
     let m; try { m = JSON.parse(raw); } catch (e) { return; }
     if (!m || typeof m !== 'object') return;
-    if (m.t === 'in') {
-      if (ws.peer && Number.isInteger(m.f) && Number.isInteger(m.b)) send(ws.peer, { t: 'in', f: m.f, b: m.b & 511 });
+    if (m.t === 'in' || m.t === 'sig' || m.t === 'ping' || m.t === 'pong') {
+      // 入力・P2P接続の合図・ping はそのまま相手へ渡す（中身の検証は受け取る側の net.js で行う）
+      if (ws.peer && ws.peer.readyState === 1) ws.peer.send(raw.toString());
     } else if (m.t === 'join') {
       leave(ws);
       let code = String(m.room || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);

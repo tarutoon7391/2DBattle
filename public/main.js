@@ -55,15 +55,61 @@ btnBoxes.onclick=()=>{toggleBoxes(); cv.focus();};
 btnGuard.onclick=()=>{dummyGuard=!dummyGuard; S.dummyGuard=dummyGuard; btnGuard.textContent=`ダミーガード ${dummyGuard?'ON':'OFF'}`; btnGuard.classList.toggle('on',dummyGuard); cv.focus();};
 document.getElementById('btnReset').onclick=()=>{if(S.mode!=='online') setMode(S.mode);};
 
-// ---------- オンライン（入力同期・ディレイ方式） ----------
-// 互いに「Nフレーム目の入力」だけを送り合い、両方そろったフレームだけ step() を進める。
-// 自分の入力は DELAY フレーム先に予約するので、通信が DELAY フレーム以内なら止まらずに動く。
-const DELAY=3;
+// ---------- オンライン ----------
+// 同期の中身は net.js。ここは「つなぐ」部分だけ：
+// Railway のサーバーは相手探しと合図（シグナリング）に使い、入力はブラウザ同士で直接送る（WebRTC）。
+// 直接つながらない回線では、サーバー中継（WebSocket）に自動で切り替わる。
+const ICE={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun.cloudflare.com:3478'}]};
 let net=null, statusText='';
 const onlinePanel=document.getElementById('onlinePanel'), roomInput=document.getElementById('room'),
       netStatus=document.getElementById('netStatus');
 function setStatus(t){statusText=t; netStatus.textContent=t;}
-function leaveOnline(){if(net){const w=net.ws; net=null; try{w.close();}catch(e){}}}
+function leaveOnline(){
+  if(!net) return;
+  const n=net; net=null;
+  clearInterval(n.pingT); clearTimeout(n.timer);
+  try{n.pc&&n.pc.close();}catch(e){}
+  try{n.ws.close();}catch(e){}
+}
+const p2p=n=>!!(n.dc&&n.dc.readyState==='open');
+function netSend(n,o){
+  const s=JSON.stringify(o);
+  if(p2p(n)){try{n.dc.send(s); return;}catch(e){}}
+  if(n.ws.readyState===1) n.ws.send(s);
+}
+function wsSend(n,o){if(n.ws.readyState===1) n.ws.send(JSON.stringify(o));}
+function updateStatus(n){
+  if(net!==n||!n.started) return;
+  const r=n.ses.rtt<0?'-':Math.round(n.ses.rtt);
+  setStatus(`対戦中：あなたは P${n.you+1} ｜ ${p2p(n)?'P2P直結':'サーバー中継'} ｜ ping ${r}ms ｜ 入力遅延 ${n.ses.delay}F`);
+}
+function beginMatch(n){
+  if(net!==n||n.started) return;
+  clearTimeout(n.timer); n.started=true;
+  S=newState('online'); S.rng=n.seed>>>0; resetFx(); updateStatus(n); cv.focus();
+}
+function setupRtc(n){
+  let pc; try{pc=new RTCPeerConnection(ICE);}catch(e){return;}
+  n.pc=pc;
+  pc.onicecandidate=e=>{if(e.candidate) wsSend(n,{t:'sig',c:e.candidate});};
+  const bind=dc=>{
+    n.dc=dc;
+    dc.onopen=()=>{if(net!==n) return; n.ses.rtt=-1; beginMatch(n); updateStatus(n);};
+    dc.onmessage=ev=>{if(net!==n) return; let m; try{m=JSON.parse(ev.data);}catch(e){return;} n.ses.onMessage(m);};
+    dc.onclose=()=>{if(n.dc===dc) n.dc=null; updateStatus(n);};
+  };
+  if(n.you===0){
+    bind(pc.createDataChannel('in',{ordered:false,maxRetransmits:0}));
+    n.sig=n.sig.then(async()=>{await pc.setLocalDescription(await pc.createOffer()); wsSend(n,{t:'sig',sdp:pc.localDescription});}).catch(()=>{});
+  }else pc.ondatachannel=e=>bind(e.channel);
+}
+async function onSig(n,m){
+  const pc=n.pc; if(!pc) return;
+  if(m.sdp){
+    await pc.setRemoteDescription(m.sdp);
+    if(m.sdp.type==='offer'){await pc.setLocalDescription(await pc.createAnswer()); wsSend(n,{t:'sig',sdp:pc.localDescription});}
+  }else if(m.c) await pc.addIceCandidate(m.c);
+}
 function joinOnline(){
   leaveOnline();
   const room=roomInput.value.trim().toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,12);
@@ -71,7 +117,7 @@ function joinOnline(){
   let ws;
   try{ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws');}
   catch(e){setStatus('サーバーに接続できません'); return;}
-  const n={ws,you:-1,frame:0,sent:DELAY-1,local:{},remote:{},stall:0,started:false};
+  const n={ws,ses:null,pc:null,dc:null,you:-1,seed:0,started:false,matched:false,timer:0,pingT:0,sig:Promise.resolve()};
   net=n; S=newState('online'); resetFx(); setStatus('接続中…');
   ws.onopen=()=>ws.send(JSON.stringify({t:'join',room}));
   ws.onmessage=ev=>{
@@ -79,31 +125,28 @@ function joinOnline(){
     let m; try{m=JSON.parse(ev.data);}catch(e){return;}
     if(m.t==='wait') setStatus(room?`ルーム「${room}」で相手を待っています…（相手にも同じコードを入れてもらう）`:'対戦相手を探しています…');
     else if(m.t==='start'){
-      n.you=m.you; n.started=true; n.frame=0; n.sent=DELAY-1; n.local={}; n.remote={}; n.stall=0;
-      S=newState('online'); S.rng=m.seed>>>0; resetFx();
-      setStatus(`対戦中：あなたは P${m.you+1}`); cv.focus();
+      n.you=m.you; n.seed=m.seed; n.matched=true;
+      n.ses=createSession(m.you,o=>netSend(n,o),()=>performance.now());
+      setStatus('相手が見つかりました。接続を確立中…');
+      setupRtc(n);
+      n.ses.ping();
+      n.pingT=setInterval(()=>{n.ses.ping(); updateStatus(n);},500);
+      n.timer=setTimeout(()=>beginMatch(n),3000); // P2Pが3秒でつながらなければサーバー中継で開始
     }
-    else if(m.t==='in') n.remote[m.f]=m.b|0;
+    else if(m.t==='sig'){n.sig=n.sig.then(()=>onSig(n,m)).catch(()=>{});}
+    else if(m.t==='in'||m.t==='ping'||m.t==='pong'){if(n.ses) n.ses.onMessage(m);}
     else if(m.t==='full'){leaveOnline(); setStatus('そのルームは満員です。別のコードで試して');}
     else if(m.t==='left'){leaveOnline(); setStatus('相手が切断しました。もう一度「入室」で再マッチ');}
   };
-  ws.onclose=()=>{if(net===n){net=null; setStatus(n.started?'接続が切れました。もう一度「入室」で再接続':'サーバーに接続できませんでした');}};
+  ws.onclose=()=>{if(net===n){leaveOnline(); setStatus(n.matched?'接続が切れました。もう一度「入室」で再接続':'サーバーに接続できませんでした');}};
 }
 function tickOnline(){
-  const n=net, target=n.frame+DELAY;
-  if(n.sent<target){
-    const b=cleanInput(keyBits(KEY_P1)|keyBits(KEY_P2)|padBits(firstPad()));
-    n.local[target]=b; n.sent=target;
-    try{n.ws.send(JSON.stringify({t:'in',f:target,b}));}catch(e){}
-  }
-  const f=n.frame, li=f<DELAY?0:n.local[f], ri=f<DELAY?0:n.remote[f];
-  if(ri===undefined){n.stall++; return false;}
-  n.stall=0;
-  const inp=n.you===0?[li,ri]:[ri,li];
-  if(S.phase==='end'&&S.pt>60&&((inp[0]|inp[1])&(BT.L|BT.M|BT.H|BT.SP|BT.SU))){const seed=S.rng; S=newState('online'); S.rng=seed; resetFx();}
-  step(S,inp);
-  delete n.local[f]; delete n.remote[f]; n.frame++;
-  return true;
+  return net.ses.tick(
+    ()=>cleanInput(keyBits(KEY_P1)|keyBits(KEY_P2)|padBits(firstPad())),
+    inp=>{
+      if(S.phase==='end'&&S.pt>60&&((inp[0]|inp[1])&(BT.L|BT.M|BT.H|BT.SP|BT.SU))){const seed=S.rng; S=newState('online'); S.rng=seed; resetFx();}
+      step(S,inp);
+    });
 }
 function firstPad(){try{return [...(navigator.getGamepads?navigator.getGamepads():[])].filter(Boolean)[0];}catch(e){return null;}}
 document.getElementById('btnJoin').onclick=joinOnline;
@@ -315,7 +358,7 @@ function drawMessages(){
     if(!net||!net.started){
       ctx.fillStyle='rgba(0,0,0,.6)'; ctx.fillRect(0,0,W,H);
       text('ONLINE',500,220,60,'#ffd34d'); text(statusText,500,300,20,'#fff');
-    }else if(net.stall>30) text('通信待ち…',500,130,22,'#fff');
+    }else if(net.ses.stall>30) text('通信待ち…',500,130,22,'#fff');
   }
   if(S.freeze>0){
     const p=S.p[S.freezeOwner];
@@ -356,7 +399,7 @@ function loop(now){
     acc-=FRAME; n++;
   }
   // 相手より遅れているときは少しだけ早回しして追いつく
-  if(S.mode==='online'&&net&&net.started&&net.remote[net.frame+DELAY+2]!==undefined) acc+=FRAME/4;
+  if(S.mode==='online'&&net&&net.started&&net.ses.behind()) acc+=FRAME/8;
   render();
   requestAnimationFrame(loop);
 }
