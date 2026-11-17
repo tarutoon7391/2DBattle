@@ -8,6 +8,7 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 3000;
+const LAG = Number(process.env.RELAY_LAG_MS) || 0; // テスト用：中継にわざと遅延を入れる（本番では設定しない）
 const PUBLIC = path.join(__dirname, 'public');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.ico': 'image/x-icon' };
 
@@ -47,7 +48,10 @@ wss.on('connection', ws => {
     if (!m || typeof m !== 'object') return;
     if (m.t === 'in' || m.t === 'sig' || m.t === 'ping' || m.t === 'pong') {
       // 入力・P2P接続の合図・ping はそのまま相手へ渡す（中身の検証は受け取る側の net.js で行う）
-      if (ws.peer && ws.peer.readyState === 1) ws.peer.send(raw.toString());
+      const peer = ws.peer, text = raw.toString();
+      if (!peer) return;
+      if (LAG) setTimeout(() => { if (peer.readyState === 1) peer.send(text); }, LAG);
+      else if (peer.readyState === 1) peer.send(text);
     } else if (m.t === 'join') {
       leave(ws);
       let code = String(m.room || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 12);
