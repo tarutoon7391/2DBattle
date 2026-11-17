@@ -6,13 +6,16 @@ let S=newState('cpu'), showBoxes=false, dummyGuard=true;
 
 // ---------- 入力 ----------
 const keys=new Set();
-const KEY_P1={KeyW:BT.UP,KeyS:BT.DOWN,KeyA:BT.LEFT,KeyD:BT.RIGHT,KeyJ:BT.L,KeyK:BT.M,KeyL:BT.H,KeyU:BT.SP,KeyI:BT.SU};
+const BT_ALL3=BT.L|BT.M|BT.H;
+const KEY_P1={Space:BT.UP,KeyO:BT_ALL3,KeyW:BT.UP,KeyS:BT.DOWN,KeyA:BT.LEFT,KeyD:BT.RIGHT,KeyJ:BT.L,KeyK:BT.M,KeyL:BT.H,KeyU:BT.SP,KeyI:BT.SU};
 const KEY_P2={ArrowUp:BT.UP,ArrowDown:BT.DOWN,ArrowLeft:BT.LEFT,ArrowRight:BT.RIGHT,
   Comma:BT.L,Period:BT.M,Slash:BT.H,Semicolon:BT.SP,Quote:BT.SU,
+  KeyP:BT_ALL3,Numpad6:BT_ALL3,
   Numpad1:BT.L,Numpad2:BT.M,Numpad3:BT.H,Numpad4:BT.SP,Numpad5:BT.SU};
 addEventListener('keydown',e=>{
   if(e.target&&e.target.tagName==='INPUT') return;
   if(e.code==='F2'){e.preventDefault(); toggleBoxes(); return;}
+  if(e.code==='KeyR'&&S.mode==='training'&&!e.repeat){setMode('training'); return;} // トレーニングのリセット
   if(KEY_P1[e.code]!=null||KEY_P2[e.code]!=null||e.code==='Space') e.preventDefault();
   keys.add(e.code);
 });
@@ -171,6 +174,7 @@ function takeEvents(){
     else if(e.type==='clash') fx.push({k:'hit',x:e.x/FX,y:e.y/FX,t:0,max:16,big:true,c:'#fff'});
     else if(e.type==='thud'){fx.push({k:'dust',x:e.x/FX,y:e.y/FX,t:0,max:20}); shake=Math.max(shake,3);}
     else if(e.type==='super') fx.push({k:'superflash',t:0,max:45,i:e.i});
+    else if(e.type==='rc'){fx.push({k:'rc',x:e.x/FX,y:e.y/FX-80,t:0,max:18,c:COL[e.i].light}); shake=Math.max(shake,5);}
   }
   S.events.length=0;
 }
@@ -290,6 +294,10 @@ function drawFx(){
       ctx.beginPath(); ctx.arc(f.x,f.y,R,0,Math.PI*2); ctx.stroke();
       for(let i=0;i<8;i++){const a=i*Math.PI/4+0.3; ctx.beginPath(); ctx.moveTo(f.x+Math.cos(a)*R*0.4,f.y+Math.sin(a)*R*0.4); ctx.lineTo(f.x+Math.cos(a)*R*1.2,f.y+Math.sin(a)*R*1.2); ctx.stroke();}
       ctx.globalAlpha=1;
+    }else if(f.k==='rc'){
+      ctx.strokeStyle=f.c; ctx.globalAlpha=1-k; ctx.lineWidth=6;
+      ctx.beginPath(); ctx.arc(f.x,f.y,30+k*150,0,Math.PI*2); ctx.stroke();
+      ctx.fillStyle=f.c; ctx.globalAlpha=(1-k)*0.25; ctx.beginPath(); ctx.arc(f.x,f.y,30+k*150,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
     }else if(f.k==='block'){
       ctx.strokeStyle='#bfe6ff'; ctx.globalAlpha=1-k; ctx.lineWidth=3;
       ctx.beginPath(); ctx.arc(f.x,f.y,14+k*26,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1;
@@ -312,7 +320,7 @@ function drawHUD(){
     fill(p.hp,p.hp<MAX_HP*0.25?'#ffb02e':'#ffe14d');
     text(name(i),i===0?x0:x0+w,68,18,COL[i].light,i===0?'left':'right');
     for(let k=0;k<WIN_ROUNDS;k++){
-      const cx=i===0?x0+60+k*22:x0+w-60-k*22;
+      const cx=i===0?x0+110+k*22:x0+w-110-k*22;
       ctx.fillStyle=k<S.wins[i]?'#ffd34d':'#2b2b38'; circle(cx,68,7);
     }
   }
@@ -324,9 +332,10 @@ function drawHUD(){
     const p=S.p[i], x0=i===0?40:700, w=260, full=p.meter>=MAX_METER;
     ctx.fillStyle='#0a0a10'; ctx.fillRect(x0-2,526,w+4,16);
     const ww=w*p.meter/MAX_METER;
-    ctx.fillStyle=full?((S.frame>>3)%2?'#7ef0ff':'#3fc8ff'):'#2f86c9';
+    ctx.fillStyle=full?((S.frame>>3)%2?'#7ef0ff':'#3fc8ff'):(p.meter>=RC_COST?'#58b6ff':'#2f6ea0');
     ctx.fillRect(i===0?x0:x0+w-ww,528,ww,12);
-    text(full?'SUPER  MAX':'SUPER',i===0?x0:x0+w,512,14,full?'#7ef0ff':'#9aa',i===0?'left':'right');
+    ctx.fillStyle='#0a0a10'; ctx.fillRect(x0+w/2-1,526,2,16); // 半分の目盛り（ブレイクアッパーが出せる量）
+    text(full?'SUPER  MAX':(p.meter>=RC_COST?'BREAK OK':'GAUGE'),i===0?x0:x0+w,512,14,full?'#7ef0ff':'#9aa',i===0?'left':'right');
   }
   // コンボ
   for(let i=0;i<2;i++){

@@ -8,6 +8,9 @@ const STAGE_L=40*FX, STAGE_R=960*FX, HALF_W=25*FX;
 const GRAV=80, JUMP_VY=-1550, JUMP_VX=420, WALK_F=360, WALK_B=280;
 // 技の入力猶予：技ボタンの後 SP_LATE フレーム以内に方向を入れても、↑を入れてジャンプが出た後 JUMP_LATE フレーム以内に技ボタンを押しても、その方向の技になる
 const SP_LATE=5, JUMP_LATE=6, SP_RANK={spN:0,spF:1,spD:2,spU:3};
+// RC_COST: ブレイクアッパーの消費ゲージ / KARA: 出始め3F以内なら同時押し技（1=投げ・ブレイク、2=ブレイクのみ）に化けられる通常技 / JUGGLE: ブレイクで浮かせた相手に追撃できる回数
+const RC_COST=500, KARA={'5L':1,'2L':1,'5M':1,'2M':1,'5H':2,'2H':2,'6H':2,'TH':2}, JUGGLE=3, ALL3=16|32|64;
+const THROWABLE=new Set(['idle','walk','crouch','attack','land']);
 const MAX_HP=1000, MAX_METER=1000, ROUND_TIME=99*60, WIN_ROUNDS=2, BUF_LEN=6;
 const BT={UP:1,DOWN:2,LEFT:4,RIGHT:8,L:16,M:32,H:64,SP:128,SU:256};
 const ATK_KEYS=['L','M','H','SP','SU'];
@@ -22,6 +25,9 @@ const MOVES={
   '2L':{name:'しゃがみ弱',s:4,a:3,r:7,dmg:25,hs:14,bs:10,box:[20,8,75,20],guard:'low',kb:400,meter:20,chain:1,cancel:true},
   '2M':{name:'しゃがみ中',s:7,a:4,r:13,dmg:55,hs:18,bs:13,box:[20,5,100,22],guard:'low',kb:500,meter:30,chain:2,cancel:true},
   '2H':{name:'足払い',s:10,a:5,r:26,dmg:90,hs:0,bs:14,box:[20,0,125,20],guard:'low',kb:300,meter:50,chain:3,cancel:true,kd:true},
+  '6H':{name:'前強（中段）',s:18,a:4,r:18,dmg:90,hs:21,bs:14,box:[20,60,100,70],guard:'high',kb:500,meter:50}, // しゃがみガード不可
+  'TH':{name:'投げ',s:5,a:2,r:22,dmg:110,hs:0,bs:0,box:[0,40,78,80],guard:'mid',kb:300,meter:40,throw:true,kd:true}, // ガード不可・地上の相手のみ
+  'RC':{name:'ブレイクアッパー',s:5,a:4,r:16,dmg:50,hs:0,bs:14,box:[5,10,95,140],guard:'mid',kb:300,meter:0,cancel:true,launcher:true}, // ゲージ半分。どの技の途中からでも出せて、当たると高く浮かせる
   'jL':{name:'ジャンプ弱',s:4,a:6,r:4,dmg:40,hs:16,bs:11,box:[10,40,65,30],guard:'high',kb:350,meter:20,air:true},
   'jM':{name:'ジャンプ中',s:6,a:5,r:6,dmg:65,hs:19,bs:13,box:[10,15,80,40],guard:'high',kb:400,meter:30,air:true},
   'jH':{name:'ジャンプ強',s:8,a:5,r:8,dmg:95,hs:22,bs:15,box:[0,-10,85,50],guard:'high',kb:450,meter:50,air:true},
@@ -39,7 +45,7 @@ function rnd(s){s.rng=(Math.imul(s.rng,1103515245)+12345)>>>0; return (s.rng>>>8
 function newFighter(i,meter){
   return{i,x:(i===0?330:670)*FX,y:FLOOR,vx:0,vy:0,push:0,facing:i===0?1:-1,air:false,crouch:false,
     hp:MAX_HP,meter:meter||0,state:'idle',t:0,move:null,mf:0,hitDone:false,hitConn:false,stun:0,inv:0,combo:0,
-    prevIn:0,curIn:0,buf:{L:0,M:0,H:0,SP:0,SU:0},idleT:0,jt:0,canc:false,spIn:0};
+    prevIn:0,curIn:0,buf:{L:0,M:0,H:0,SP:0,SU:0},idleT:0,jt:0,canc:false,spIn:0,jug:0};
 }
 function newState(mode){
   return{mode,frame:0,rng:20261117,phase:mode==='training'?'fight':'intro',pt:0,round:1,wins:[0,0],
@@ -100,10 +106,11 @@ function pickMove(s,p,d){
     if(d.fwd) return 'spF';
     if(!s.projs.some(q=>q.owner===p.i)) return 'spN';
   }
-  for(const k of ['H','M','L']) if(b[k]) return p.air?'j'+k:(d.down?'2':'5')+k;
+  for(const k of ['H','M','L']) if(b[k]) return p.air?'j'+k:(d.down?'2':(k==='H'&&d.fwd?'6':'5'))+k;
   return null;
 }
 function canCancel(f,t){
+  if(f.throw) return false;
   if(t.super) return !f.super;
   if(f.special||f.super) return false;
   if(t.special) return !!f.cancel;
@@ -113,7 +120,7 @@ function canCancel(f,t){
 // canc: 当てた技からのキャンセルで出したか。キャンセルで出した技だけが、浮いている相手に当たる（追撃）
 function startMove(s,p,id,canc){
   const m=MOVES[id];
-  if(m.super&&p.air){p.y=FLOOR; p.vy=0; p.air=false;} // 昇竜拳からのキャンセルは地上に戻って出す
+  if((m.super||m.launcher)&&p.air){p.y=FLOOR; p.vy=0; p.air=false;} // 昇竜拳からのキャンセルは地上に戻って出す
   p.state='attack'; p.move=id; p.mf=0; p.hitDone=false; p.hitConn=false; p.canc=!!canc;
   if(canc&&m.box){ // キャンセルで出した打撃は、離れていたら出始めに間合いを詰める（最大110px）
     const o=s.p[1-p.i], ox=o.x+((o.push*20/3)|0); // 相手がノックバックで下がる分も見込む
@@ -122,6 +129,7 @@ function startMove(s,p,id,canc){
   }
   for(const k of ATK_KEYS) p.buf[k]=0;
   if(!p.air){p.vx=0; p.crouch=(id[0]==='2'||id==='spD');}
+  if(m.launcher){p.meter-=RC_COST; s.events.push({type:'rc',i:p.i,x:p.x,y:p.y});}
   if(m.super){p.meter=0; s.freeze=45; s.freezeOwner=p.i; s.events.push({type:'super',i:p.i});}
 }
 function attackTick(s,p){
@@ -156,6 +164,14 @@ function updateFighter(s,p,o){
       // 技ボタンが少し先に入った場合：出始めのうちは、後から入った方向の技に切り替える
       const want=d.up?'spU':d.down?'spD':d.fwd?'spF':'spN';
       if(SP_RANK[want]>SP_RANK[p.move]) startMove(s,p,want,p.canc);
+    }
+    { // 同時押し：弱+中+強＝ブレイクアッパー、弱+中＝投げ。数フレームのズレは許容する
+      const b=p.buf, held=p.curIn&ALL3, mv=p.move?MOVES[p.move]:null;
+      const ground=ACTIONABLE.has(p.state)&&!p.air;
+      const early=p.state==='attack'&&!p.air&&p.mf<=3&&!p.hitConn?(KARA[p.move]||0):0;
+      if(p.meter>=RC_COST&&((b.L&&b.M&&b.H)||(early&&held===ALL3))
+         &&(ground||(p.state==='attack'&&!mv.super&&!mv.launcher&&(!p.air||p.move==='spU')))) startMove(s,p,'RC',true);
+      else if((ground&&b.L&&b.M&&!b.H)||(early===1&&held===(16|32))) startMove(s,p,'TH');
     }
     if(ACTIONABLE.has(p.state)){
       const id=pickMove(s,p,d); if(id) startMove(s,p,id);
@@ -196,7 +212,7 @@ function onLand(s,p){
     case 'jump': p.state='land'; p.t=3; p.vx=0; break;
     case 'attack':{const m=MOVES[p.move]; p.move=null; p.state='land'; p.t=m&&m.air?4:12; p.vx=0; break;}
     case 'launch':
-      p.vx=0;
+      p.vx=0; p.jug=0;
       if(p.hp<=0&&s.mode!=='training'){p.state='ko';}
       else{p.state='down'; p.t=36;}
       s.events.push({type:'thud',x:p.x,y:p.y});
@@ -262,13 +278,16 @@ function checkHits(s){
   const ev=[];
   for(let i=0;i<2;i++){
     const a=s.p[i],d=s.p[1-i],hb=activeBox(a);
-    if(!hb||(d.inv&&!(a.canc&&d.state==='launch'))) continue;
+    if(!hb) continue;
+    const m=MOVES[a.move];
+    if(m.throw){ if(d.inv||d.air||!THROWABLE.has(d.state)) continue; }
+    else if(d.inv&&!(d.state==='launch'&&(a.canc||d.jug>0))) continue;
     const hit=hurtBoxes(d).find(h=>ov(hb,h));
-    if(hit) ev.push({a,d,m:MOVES[a.move],proj:null,...contact(hb,hit)});
+    if(hit) ev.push({a,d,m,proj:null,...contact(hb,hit)});
   }
   for(const q of s.projs){
     if(q.dead) continue;
-    const d=s.p[1-q.owner]; if(d.inv&&!(q.canc&&d.state==='launch')) continue;
+    const d=s.p[1-q.owner]; if(d.inv&&!(d.state==='launch'&&(q.canc||d.jug>0))) continue;
     const r={x:q.x-q.w*FX/2,y:q.y-q.h*FX/2,w:q.w*FX,h:q.h*FX};
     const hit=hurtBoxes(d).find(h=>ov(r,h));
     if(hit){ev.push({a:s.p[q.owner],d,m:q,proj:q,...contact(r,hit)}); q.dead=true;}
@@ -280,7 +299,8 @@ function applyHit(s,e){
   const dir=proj?(proj.vx>0?1:-1):(d.x>a.x?1:(d.x<a.x?-1:a.facing));
   if(!proj){a.hitDone=true; a.hitConn=true;}
   const kb=m.kb||400, special=!!(m.special||m.super);
-  const blocked=canBlock(d,a,m.guard||'mid',proj);
+  const blocked=!m.throw&&canBlock(d,a,m.guard||'mid',proj);
+  if(d.state==='launch'&&d.jug>0) d.jug--;
   let adv=null;
   if(blocked){
     d.state='blockstun'; d.stun=m.bs; d.move=null; d.vx=0; d.push=dir*kb;
@@ -300,7 +320,8 @@ function applyHit(s,e){
     if(m.kd||!m.hs||d.air||d.hp<=0){
       d.state='launch'; d.air=true; d.crouch=false;
       // ダウン技は高く・近くに浮かせて、キャンセルした追撃が届くようにする
-      d.vy=m.super?-1300:(m.kd?-1200:-950); d.vx=dir*(m.super?520:(m.kd?150:360)); d.push=0;
+      d.vy=m.super?-1300:(m.launcher?-1500:(m.kd?-1200:-950)); d.vx=dir*(m.super?520:(m.launcher?60:(m.kd?150:360))); d.push=0;
+      if(m.launcher) d.jug=JUGGLE;
       if(!proj) adv='down';
     }else{
       d.state='hitstun'; d.stun=m.hs; d.vx=0; d.push=dir*kb;
@@ -400,11 +421,13 @@ function aiInput(s,i){
     else if(r<0.52){h=back; t=10;}
     else{h=fwd; t=10;}
   }else{
-    if(r<0.25){h=BT.DOWN|BT.L; t=3;}
-    else if(r<0.38){h=BT.L; t=3;}
-    else if(r<0.5){h=BT.DOWN|BT.H; t=3;}
-    else if(r<0.6){h=BT.H; t=3;}
-    else if(r<0.7){h=BT.DOWN|BT.SP; t=3;}
+    if(r<0.22){h=BT.DOWN|BT.L; t=3;}
+    else if(r<0.33){h=BT.L; t=3;}
+    else if(r<0.44){h=BT.DOWN|BT.H; t=3;}
+    else if(r<0.52){h=BT.H; t=3;}
+    else if(r<0.58){h=fwd|BT.H; t=3;}
+    else if(r<0.66&&dist<110){h=BT.L|BT.M; t=3;}
+    else if(r<0.74){h=BT.DOWN|BT.SP; t=3;}
     else if(r<0.85){h=back|BT.DOWN; t=12;}
     else{h=back; t=10;}
   }
