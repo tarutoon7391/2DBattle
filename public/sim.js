@@ -39,7 +39,7 @@ function rnd(s){s.rng=(Math.imul(s.rng,1103515245)+12345)>>>0; return (s.rng>>>8
 function newFighter(i,meter){
   return{i,x:(i===0?330:670)*FX,y:FLOOR,vx:0,vy:0,push:0,facing:i===0?1:-1,air:false,crouch:false,
     hp:MAX_HP,meter:meter||0,state:'idle',t:0,move:null,mf:0,hitDone:false,hitConn:false,stun:0,inv:0,combo:0,
-    prevIn:0,curIn:0,buf:{L:0,M:0,H:0,SP:0,SU:0},idleT:0,jt:0};
+    prevIn:0,curIn:0,buf:{L:0,M:0,H:0,SP:0,SU:0},idleT:0,jt:0,canc:false,spIn:0};
 }
 function newState(mode){
   return{mode,frame:0,rng:20261117,phase:mode==='training'?'fight':'intro',pt:0,round:1,wins:[0,0],
@@ -71,6 +71,7 @@ const ov=(a,b)=>a.x<b.x+b.w&&b.x<a.x+a.w&&a.y<b.y+b.h&&b.y<a.y+a.h;
 function hurtBoxes(p){
   let b;
   if((p.state==='down'||p.state==='ko')&&!p.air) b=[-60,0,120,28];
+  else if(p.state==='launch') b=[-32,-((FLOOR-p.y)/FX|0),64,150+((FLOOR-p.y)/FX|0)]; // 浮かされ中は足元の地面まで判定を伸ばし、キャンセルで出した追撃が下をくぐらないようにする
   else if(p.air) b=[-28,20,56,130];
   else if(p.crouch) b=[-32,0,64,100];
   else b=[-30,0,60,160];
@@ -91,8 +92,9 @@ function activeBox(p){
 
 function pickMove(s,p,d){
   const b=p.buf;
-  if(b.SU&&p.meter>=MAX_METER&&!p.air) return 'SU';
+  if(b.SU&&p.meter>=MAX_METER&&(!p.air||(p.state==='attack'&&p.move==='spU'))) return 'SU'; // 昇竜拳は空中でも必殺技でキャンセルできる
   if(b.SP&&!p.air){
+    const q=dirs(p,p.spIn); d={up:d.up||q.up,down:d.down||q.down,fwd:d.fwd||q.fwd};
     if(d.up) return 'spU';
     if(d.down) return 'spD';
     if(d.fwd) return 'spF';
@@ -108,9 +110,16 @@ function canCancel(f,t){
   if(f.air||t.air) return false;
   return !!(f.chain&&t.chain&&t.chain>f.chain);
 }
-function startMove(s,p,id){
+// canc: 当てた技からのキャンセルで出したか。キャンセルで出した技だけが、浮いている相手に当たる（追撃）
+function startMove(s,p,id,canc){
   const m=MOVES[id];
-  p.state='attack'; p.move=id; p.mf=0; p.hitDone=false; p.hitConn=false;
+  if(m.super&&p.air){p.y=FLOOR; p.vy=0; p.air=false;} // 昇竜拳からのキャンセルは地上に戻って出す
+  p.state='attack'; p.move=id; p.mf=0; p.hitDone=false; p.hitConn=false; p.canc=!!canc;
+  if(canc&&m.box){ // キャンセルで出した打撃は、離れていたら出始めに間合いを詰める（最大110px）
+    const o=s.p[1-p.i], ox=o.x+((o.push*20/3)|0); // 相手がノックバックで下がる分も見込む
+    const gap=Math.min(110*FX,Math.abs(ox-p.x)-70*FX);
+    p.push=gap>0?(o.x>p.x?1:-1)*((gap*15/100)|0):0;
+  }
   for(const k of ATK_KEYS) p.buf[k]=0;
   if(!p.air){p.vx=0; p.crouch=(id[0]==='2'||id==='spD');}
   if(m.super){p.meter=0; s.freeze=45; s.freezeOwner=p.i; s.events.push({type:'super',i:p.i});}
@@ -124,7 +133,7 @@ function attackTick(s,p){
   if(m.proj&&p.mf===m.s){
     const j=m.proj;
     s.projs.push({owner:p.i,x:p.x+p.facing*60*FX,y:p.y-j.y*FX,vx:j.vx*p.facing,w:j.w,h:j.h,life:j.life,
-      name:m.name,dmg:j.dmg,hs:j.hs,bs:j.bs,guard:'mid',kb:400,meter:30,special:true,dead:false});
+      canc:p.canc,name:m.name,dmg:j.dmg,hs:j.hs,bs:j.bs,guard:'mid',kb:400,meter:30,special:true,dead:false});
   }
   if(m.air){ if(p.mf>=m.T){p.state='jump'; p.move=null;} }
   else if(m.rise){ /* 着地で終了 */ }
@@ -146,7 +155,7 @@ function updateFighter(s,p,o){
     }else if(p.state==='attack'&&!p.air&&p.mf<=SP_LATE&&SP_RANK[p.move]!==undefined){
       // 技ボタンが少し先に入った場合：出始めのうちは、後から入った方向の技に切り替える
       const want=d.up?'spU':d.down?'spD':d.fwd?'spF':'spN';
-      if(SP_RANK[want]>SP_RANK[p.move]) startMove(s,p,want);
+      if(SP_RANK[want]>SP_RANK[p.move]) startMove(s,p,want,p.canc);
     }
     if(ACTIONABLE.has(p.state)){
       const id=pickMove(s,p,d); if(id) startMove(s,p,id);
@@ -154,7 +163,7 @@ function updateFighter(s,p,o){
       const m=MOVES[p.move];
       if(p.mf>=m.s&&p.mf<=m.s+m.a+10){
         const id=pickMove(s,p,d);
-        if(id&&canCancel(m,MOVES[id])) startMove(s,p,id);
+        if(id&&canCancel(m,MOVES[id])) startMove(s,p,id,true);
       }
     }
   }
@@ -253,13 +262,13 @@ function checkHits(s){
   const ev=[];
   for(let i=0;i<2;i++){
     const a=s.p[i],d=s.p[1-i],hb=activeBox(a);
-    if(!hb||d.inv) continue;
+    if(!hb||(d.inv&&!(a.canc&&d.state==='launch'))) continue;
     const hit=hurtBoxes(d).find(h=>ov(hb,h));
     if(hit) ev.push({a,d,m:MOVES[a.move],proj:null,...contact(hb,hit)});
   }
   for(const q of s.projs){
     if(q.dead) continue;
-    const d=s.p[1-q.owner]; if(d.inv) continue;
+    const d=s.p[1-q.owner]; if(d.inv&&!(q.canc&&d.state==='launch')) continue;
     const r={x:q.x-q.w*FX/2,y:q.y-q.h*FX/2,w:q.w*FX,h:q.h*FX};
     const hit=hurtBoxes(d).find(h=>ov(r,h));
     if(hit){ev.push({a:s.p[q.owner],d,m:q,proj:q,...contact(r,hit)}); q.dead=true;}
@@ -290,7 +299,8 @@ function applyHit(s,e){
     if(s.mode==='training'&&d.hp<1) d.hp=1;
     if(m.kd||!m.hs||d.air||d.hp<=0){
       d.state='launch'; d.air=true; d.crouch=false;
-      d.vy=m.super?-1300:-950; d.vx=dir*(m.super?520:360); d.push=0;
+      // ダウン技は高く・近くに浮かせて、キャンセルした追撃が届くようにする
+      d.vy=m.super?-1300:(m.kd?-1200:-950); d.vx=dir*(m.super?520:(m.kd?150:360)); d.push=0;
       if(!proj) adv='down';
     }else{
       d.state='hitstun'; d.stun=m.hs; d.vx=0; d.push=dir*kb;
@@ -320,7 +330,8 @@ function step(s,inputs){
     const pressed=inp&~p.prevIn;
     p.curIn=inp; p.prevIn=inp;
     if(pressed&BT.L)p.buf.L=BUF_LEN; if(pressed&BT.M)p.buf.M=BUF_LEN; if(pressed&BT.H)p.buf.H=BUF_LEN;
-    if(pressed&BT.SP)p.buf.SP=BUF_LEN; if(pressed&BT.SU)p.buf.SU=BUF_LEN;
+    if(pressed&BT.SP){p.buf.SP=BUF_LEN; p.spIn=inp&15;} // 技ボタンを押した瞬間の方向も覚えておく（ヒットストップ中の先行入力用）
+     if(pressed&BT.SU)p.buf.SU=BUF_LEN;
   }
   if(s.freeze>0){s.freeze--; return;}
   if(s.hitstop>0){s.hitstop--; return;}
