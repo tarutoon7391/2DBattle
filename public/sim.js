@@ -6,6 +6,8 @@
 const FX=100, W=1000, H=560, FLOOR=480*FX;
 const STAGE_L=40*FX, STAGE_R=960*FX, HALF_W=25*FX;
 const GRAV=80, JUMP_VY=-1550, JUMP_VX=420, WALK_F=360, WALK_B=280;
+// 技の入力猶予：技ボタンの後 SP_LATE フレーム以内に方向を入れても、↑を入れてジャンプが出た後 JUMP_LATE フレーム以内に技ボタンを押しても、その方向の技になる
+const SP_LATE=5, JUMP_LATE=6, SP_RANK={spN:0,spF:1,spD:2,spU:3};
 const MAX_HP=1000, MAX_METER=1000, ROUND_TIME=99*60, WIN_ROUNDS=2, BUF_LEN=6;
 const BT={UP:1,DOWN:2,LEFT:4,RIGHT:8,L:16,M:32,H:64,SP:128,SU:256};
 const ATK_KEYS=['L','M','H','SP','SU'];
@@ -37,7 +39,7 @@ function rnd(s){s.rng=(Math.imul(s.rng,1103515245)+12345)>>>0; return (s.rng>>>8
 function newFighter(i,meter){
   return{i,x:(i===0?330:670)*FX,y:FLOOR,vx:0,vy:0,push:0,facing:i===0?1:-1,air:false,crouch:false,
     hp:MAX_HP,meter:meter||0,state:'idle',t:0,move:null,mf:0,hitDone:false,hitConn:false,stun:0,inv:0,combo:0,
-    prevIn:0,curIn:0,buf:{L:0,M:0,H:0,SP:0,SU:0},idleT:0};
+    prevIn:0,curIn:0,buf:{L:0,M:0,H:0,SP:0,SU:0},idleT:0,jt:0};
 }
 function newState(mode){
   return{mode,frame:0,rng:20261117,phase:mode==='training'?'fight':'intro',pt:0,round:1,wins:[0,0],
@@ -138,6 +140,14 @@ function updateFighter(s,p,o){
   }
   const d=dirs(p,inp);
   if(canAct){
+    if(p.state==='jump'&&p.jt<=JUMP_LATE&&p.buf.SP&&d.up){
+      // ↑が少し先に入ってジャンプになった直後なら、昇竜に切り替える
+      p.y=FLOOR; p.vy=0; p.vx=0; p.air=false; startMove(s,p,'spU');
+    }else if(p.state==='attack'&&!p.air&&p.mf<=SP_LATE&&SP_RANK[p.move]!==undefined){
+      // 技ボタンが少し先に入った場合：出始めのうちは、後から入った方向の技に切り替える
+      const want=d.up?'spU':d.down?'spD':d.fwd?'spF':'spN';
+      if(SP_RANK[want]>SP_RANK[p.move]) startMove(s,p,want);
+    }
     if(ACTIONABLE.has(p.state)){
       const id=pickMove(s,p,d); if(id) startMove(s,p,id);
     }else if(p.state==='attack'&&p.hitConn){
@@ -152,7 +162,7 @@ function updateFighter(s,p,o){
     case 'idle': case 'walk': case 'crouch':
       if(!canAct){p.state='idle'; p.vx=0; p.crouch=false; break;}
       if(d.up){
-        p.state='jump'; p.air=true; p.crouch=false; p.vy=JUMP_VY;
+        p.state='jump'; p.jt=0; p.air=true; p.crouch=false; p.vy=JUMP_VY;
         p.vx=d.fwd?JUMP_VX*p.facing:(d.back?-JUMP_VX*p.facing:0);
       }else if(d.down){p.state='crouch'; p.crouch=true; p.vx=0;}
       else{
@@ -163,6 +173,7 @@ function updateFighter(s,p,o){
       }
       break;
     case 'attack': attackTick(s,p); break;
+    case 'jump': p.jt++; break;
     case 'hitstun': case 'blockstun': if(--p.stun<=0) p.state='idle'; break;
     case 'land': if(--p.t<=0) p.state='idle'; break;
     case 'down': p.inv=1; p.combo=0; if(--p.t<=0){p.state='getup'; p.t=18;} break;
