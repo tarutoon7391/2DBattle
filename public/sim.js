@@ -22,7 +22,7 @@ const ACTIONABLE=new Set(['idle','walk','crouch','jump']);
 const MOVES={
   '5L':{name:'立ち弱',s:4,a:3,r:7,dmg:30,hs:15,bs:11,box:[20,108,72,22],guard:'mid',kb:400,meter:20,chain:1,cancel:true},
   '5M':{name:'立ち中',s:7,a:4,r:13,dmg:60,hs:19,bs:14,box:[20,92,95,26],guard:'mid',kb:500,meter:30,chain:2,cancel:true},
-  '5H':{name:'立ち強',s:11,a:5,r:26,dmg:100,hs:23,bs:16,box:[20,78,118,36],guard:'mid',kb:650,meter:50,chain:3,cancel:true},
+  '5H':{name:'立ち強',s:11,a:5,r:20,dmg:100,hs:23,bs:16,box:[20,78,118,36],guard:'mid',kb:650,meter:50,chain:3,cancel:true},
   '2L':{name:'しゃがみ弱',s:4,a:3,r:7,dmg:25,hs:14,bs:10,box:[20,8,75,20],guard:'low',kb:400,meter:20,chain:1,cancel:true},
   '2M':{name:'しゃがみ中',s:7,a:4,r:13,dmg:55,hs:18,bs:13,box:[20,5,100,22],guard:'low',kb:500,meter:30,chain:2,cancel:true},
   '2H':{name:'足払い',s:10,a:5,r:26,dmg:90,hs:0,bs:14,box:[20,0,125,20],guard:'low',kb:300,meter:50,chain:3,cancel:true,kd:true},
@@ -46,7 +46,7 @@ function rnd(s){s.rng=(Math.imul(s.rng,1103515245)+12345)>>>0; return (s.rng>>>8
 function newFighter(i,meter){
   return{i,x:(i===0?330:670)*FX,y:FLOOR,vx:0,vy:0,push:0,facing:i===0?1:-1,air:false,crouch:false,
     hp:MAX_HP,meter:meter||0,state:'idle',t:0,move:null,mf:0,hitDone:false,hitConn:false,stun:0,inv:0,combo:0,
-    prevIn:0,curIn:0,buf:{L:0,M:0,H:0,SP:0,SU:0},idleT:0,jt:0,canc:false,spIn:0,jug:0};
+    prevIn:0,curIn:0,buf:{L:0,M:0,H:0,SP:0,SU:0},idleT:0,jt:0,canc:false,spIn:0,jug:0,airUsed:false};
 }
 function newState(mode){
   return{mode,frame:0,rng:20261117,phase:mode==='training'?'fight':'intro',pt:0,round:1,wins:[0,0],
@@ -107,6 +107,7 @@ function pickMove(s,p,d){
     if(d.fwd) return 'spF';
     if(!s.projs.some(q=>q.owner===p.i)) return 'spN';
   }
+  if(p.air&&p.airUsed) return null; // 空中攻撃は1回のジャンプにつき1回まで（昇りで当てて下りでもう一度、のループ防止）
   for(const k of ['H','M','L']) if(b[k]) return p.air?'j'+k:(d.down?'2':(k==='H'&&d.fwd?'6':'5'))+k;
   return null;
 }
@@ -129,6 +130,7 @@ function startMove(s,p,id,canc){
     p.push=gap>0?(o.x>p.x?1:-1)*((gap*15/100)|0):0;
   }
   for(const k of ATK_KEYS) p.buf[k]=0;
+  if(m.air) p.airUsed=true;
   if(!p.air){p.vx=0; p.crouch=(id[0]==='2'||id==='spD');}
   if(m.launcher){p.meter-=RC_COST; s.events.push({type:'rc',i:p.i,x:p.x,y:p.y});}
   if(m.super){p.meter=0; s.freeze=45; s.freezeOwner=p.i; s.events.push({type:'super',i:p.i});}
@@ -188,7 +190,7 @@ function updateFighter(s,p,o){
     case 'idle': case 'walk': case 'crouch':
       if(!canAct){p.state='idle'; p.vx=0; p.crouch=false; break;}
       if(d.up){
-        p.state='jump'; p.jt=0; p.air=true; p.crouch=false; p.vy=JUMP_VY;
+        p.state='jump'; p.jt=0; p.airUsed=false; p.air=true; p.crouch=false; p.vy=JUMP_VY;
         p.vx=d.fwd?JUMP_VX*p.facing:(d.back?-JUMP_VX*p.facing:0);
       }else if(d.down){p.state='crouch'; p.crouch=true; p.vx=0;}
       else{
@@ -217,7 +219,7 @@ function updateFighter(s,p,o){
 function onLand(s,p){
   switch(p.state){
     case 'jump': p.state='land'; p.t=3; p.vx=0; break;
-    case 'attack':{const m=MOVES[p.move]; p.move=null; p.state='land'; p.t=m&&m.air?6:12; p.vx=0; break;}
+    case 'attack':{const m=MOVES[p.move]; p.move=null; p.state='land'; p.t=m&&m.air?4:12; p.vx=0; break;}
     case 'launch':
       p.vx=0; p.jug=0;
       if(p.hp<=0&&s.mode!=='training'){p.state='ko';}
