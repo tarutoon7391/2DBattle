@@ -10,6 +10,7 @@ const GRAV=80, JUMP_VY=-1550, JUMP_VX=420, WALK_F=360, WALK_B=280;
 const SP_LATE=5, JUMP_LATE=6, SP_RANK={spN:0,spF:1,spD:2,spU:3};
 // RC_COST: ブレイクアッパーの消費ゲージ / KARA: 出始め3F以内なら同時押し技（1=投げ・ブレイク、2=ブレイクのみ）に化けられる通常技 / JUGGLE: ブレイクで浮かせた相手に追撃できる回数
 const RC_COST=500, KARA={'5L':1,'2L':1,'5M':1,'2M':1,'5H':2,'2H':2,'6H':2,'TH':2}, JUGGLE=3, ALL3=16|32|64;
+const TECH_WINDOW=10; // 投げ抜けの受付：つかまれてからこのフレーム数以内に 弱+中（つかまれる直前6F以内の入力も有効）
 const THROWABLE=new Set(['idle','walk','crouch','attack','land']);
 const MAX_HP=1000, MAX_METER=1000, ROUND_TIME=99*60, WIN_ROUNDS=2, BUF_LEN=6;
 const BT={UP:1,DOWN:2,LEFT:4,RIGHT:8,L:16,M:32,H:64,SP:128,SU:256};
@@ -21,7 +22,7 @@ const ACTIONABLE=new Set(['idle','walk','crouch','jump']);
 const MOVES={
   '5L':{name:'立ち弱',s:4,a:3,r:7,dmg:30,hs:15,bs:11,box:[20,108,72,22],guard:'mid',kb:400,meter:20,chain:1,cancel:true},
   '5M':{name:'立ち中',s:7,a:4,r:13,dmg:60,hs:19,bs:14,box:[20,92,95,26],guard:'mid',kb:500,meter:30,chain:2,cancel:true},
-  '5H':{name:'立ち強',s:11,a:5,r:20,dmg:100,hs:23,bs:16,box:[20,78,118,36],guard:'mid',kb:650,meter:50,chain:3,cancel:true},
+  '5H':{name:'立ち強',s:11,a:5,r:26,dmg:100,hs:23,bs:16,box:[20,78,118,36],guard:'mid',kb:650,meter:50,chain:3,cancel:true},
   '2L':{name:'しゃがみ弱',s:4,a:3,r:7,dmg:25,hs:14,bs:10,box:[20,8,75,20],guard:'low',kb:400,meter:20,chain:1,cancel:true},
   '2M':{name:'しゃがみ中',s:7,a:4,r:13,dmg:55,hs:18,bs:13,box:[20,5,100,22],guard:'low',kb:500,meter:30,chain:2,cancel:true},
   '2H':{name:'足払い',s:10,a:5,r:26,dmg:90,hs:0,bs:14,box:[20,0,125,20],guard:'low',kb:300,meter:50,chain:3,cancel:true,kd:true},
@@ -51,7 +52,7 @@ function newState(mode){
   return{mode,frame:0,rng:20261117,phase:mode==='training'?'fight':'intro',pt:0,round:1,wins:[0,0],
     timer:ROUND_TIME,hitstop:0,freeze:0,freezeOwner:-1,p:[newFighter(0),newFighter(1)],projs:[],events:[],
     roundWinner:-1,koReason:'',matchWinner:-1,lastAdv:null,dummyGuard:true,
-    ai:{hold:0,t:0,def:false,threat:false,oAir:false,aa:false}};
+    ai:{hold:0,t:0,def:false,threat:false,oAir:false,aa:false,gr:false,tech:false}};
 }
 function resetRound(s){
   const m0=s.p[0].meter,m1=s.p[1].meter;
@@ -201,6 +202,12 @@ function updateFighter(s,p,o){
     case 'jump': p.jt++; break;
     case 'hitstun': case 'blockstun': if(--p.stun<=0) p.state='idle'; break;
     case 'land': if(--p.t<=0) p.state='idle'; break;
+    case 'grabbed': // つかまれ中：弱+中で投げ抜け、時間切れで投げが成立
+      p.inv=1;
+      if(!(o.state==='attack'&&o.move==='TH')){p.state='idle'; break;} // 投げた側が潰された
+      if(p.buf.L&&p.buf.M){techBreak(s,o,p); break;}
+      if(--p.t<=0) applyHit(s,{a:o,d:p,m:MOVES.TH,proj:null,px:(o.x+p.x)>>1,py:p.y-90*FX});
+      break;
     case 'down': p.inv=1; p.combo=0; if(--p.t<=0){p.state='getup'; p.t=18;} break;
     case 'getup': p.inv=1; if(--p.t<=0) p.state='idle'; break;
     case 'launch': case 'ko': p.inv=1; break;
@@ -210,7 +217,7 @@ function updateFighter(s,p,o){
 function onLand(s,p){
   switch(p.state){
     case 'jump': p.state='land'; p.t=3; p.vx=0; break;
-    case 'attack':{const m=MOVES[p.move]; p.move=null; p.state='land'; p.t=m&&m.air?4:12; p.vx=0; break;}
+    case 'attack':{const m=MOVES[p.move]; p.move=null; p.state='land'; p.t=m&&m.air?6:12; p.vx=0; break;}
     case 'launch':
       p.vx=0; p.jug=0;
       if(p.hp<=0&&s.mode!=='training'){p.state='ko';}
@@ -274,8 +281,17 @@ function contact(r1,r2){
   const y1=Math.max(r1.y,r2.y),y2=Math.min(r1.y+r1.h,r2.y+r2.h);
   return{px:(x1+x2)>>1,py:(y1+y2)>>1};
 }
+// 投げ抜け：a=投げた側 d=抜けた側。ダメージなしで互いに離れ、同じ硬直で仕切り直し
+function techBreak(s,a,d){
+  const dir=d.x>=a.x?1:-1;
+  for(const [p,sg] of [[a,-dir],[d,dir]]){
+    p.state='land'; p.t=14; p.move=null; p.vx=0; p.push=sg*700; p.crouch=false;
+    for(const k of ATK_KEYS) p.buf[k]=0;
+  }
+  s.hitstop=6; s.events.push({type:'tech',x:(a.x+d.x)>>1,y:d.y-110*FX});
+}
 function checkHits(s){
-  const ev=[];
+  const ev=[], grabs=[];
   for(let i=0;i<2;i++){
     const a=s.p[i],d=s.p[1-i],hb=activeBox(a);
     if(!hb) continue;
@@ -283,7 +299,8 @@ function checkHits(s){
     if(m.throw){ if(d.inv||d.air||!THROWABLE.has(d.state)) continue; }
     else if(d.inv&&!(d.state==='launch'&&(a.canc||d.jug>0))) continue;
     const hit=hurtBoxes(d).find(h=>ov(hb,h));
-    if(hit) ev.push({a,d,m,proj:null,...contact(hb,hit)});
+    if(!hit) continue;
+    if(m.throw) grabs.push({a,d}); else ev.push({a,d,m,proj:null,...contact(hb,hit)});
   }
   for(const q of s.projs){
     if(q.dead) continue;
@@ -293,6 +310,12 @@ function checkHits(s){
     if(hit){ev.push({a:s.p[q.owner],d,m:q,proj:q,...contact(r,hit)}); q.dead=true;}
   }
   for(const e of ev) applyHit(s,e);
+  if(grabs.length===2) techBreak(s,grabs[0].a,grabs[0].d); // 同時に投げ合ったら相殺
+  else for(const {a,d} of grabs){
+    if(d.state==='hitstun'||d.state==='launch') continue; // 同じフレームに打撃が当たっていたら投げは不成立
+    if(d.state==='attack'&&d.move==='TH'){techBreak(s,a,d); continue;} // 相手も投げを出しかけていたら投げ抜け扱い
+    a.hitDone=true; d.state='grabbed'; d.t=TECH_WINDOW; d.move=null; d.vx=0; d.push=0; d.crouch=false;
+  }
 }
 function applyHit(s,e){
   const {a,d,m,proj}=e;
@@ -386,6 +409,11 @@ function step(s,inputs){
 function aiInput(s,i){
   const p=s.p[i],o=s.p[1-i],ai=s.ai;
   if(s.phase!=='fight'){ai.t=0; return 0;}
+  if(p.state==='grabbed'){ // 投げ抜けは35%で成功
+    if(!ai.gr){ai.gr=true; ai.tech=rnd(s)<0.35;}
+    return ai.tech?(BT.L|BT.M):0;
+  }
+  ai.gr=false;
   const fwd=o.x>p.x?BT.RIGHT:BT.LEFT, back=fwd===BT.RIGHT?BT.LEFT:BT.RIGHT;
   const dist=Math.abs(o.x-p.x)/FX;
   const oProj=s.projs.some(q=>q.owner===o.i&&Math.abs(q.x-p.x)<320*FX&&((q.vx>0)===(p.x>q.x)));

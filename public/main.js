@@ -171,6 +171,7 @@ function takeEvents(){
       shake=Math.max(shake,e.big?9:4);
       comboShow[e.owner]={n:e.combo,t:80};
     }else if(e.type==='block') fx.push({k:'block',x:e.x/FX,y:e.y/FX,t:0,max:12});
+    else if(e.type==='tech'){fx.push({k:'block',x:e.x/FX,y:e.y/FX+20,t:0,max:14}); fx.push({k:'label',x:e.x/FX,y:e.y/FX-40,t:0,max:45,s:'投げ抜け'}); shake=Math.max(shake,3);}
     else if(e.type==='clash') fx.push({k:'hit',x:e.x/FX,y:e.y/FX,t:0,max:16,big:true,c:'#fff'});
     else if(e.type==='thud'){fx.push({k:'dust',x:e.x/FX,y:e.y/FX,t:0,max:20}); shake=Math.max(shake,3);}
     else if(e.type==='super') fx.push({k:'superflash',t:0,max:45,i:e.i});
@@ -298,6 +299,8 @@ function drawFx(){
       ctx.strokeStyle=f.c; ctx.globalAlpha=1-k; ctx.lineWidth=6;
       ctx.beginPath(); ctx.arc(f.x,f.y,30+k*150,0,Math.PI*2); ctx.stroke();
       ctx.fillStyle=f.c; ctx.globalAlpha=(1-k)*0.25; ctx.beginPath(); ctx.arc(f.x,f.y,30+k*150,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+    }else if(f.k==='label'){
+      ctx.globalAlpha=Math.min(1,(1-k)*3); text(f.s,f.x,f.y-k*20,26,'#bfe6ff'); ctx.globalAlpha=1;
     }else if(f.k==='block'){
       ctx.strokeStyle='#bfe6ff'; ctx.globalAlpha=1-k; ctx.lineWidth=3;
       ctx.beginPath(); ctx.arc(f.x,f.y,14+k*26,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1;
