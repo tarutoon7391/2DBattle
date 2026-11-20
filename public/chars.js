@@ -37,7 +37,10 @@ function buildMoves(over){
     const v={...over[k]}, fresh=v.fresh; delete v.fresh;
     o[k]=fresh?{guard:'mid',kb:400,hs:0,bs:14,meter:60,...v}:{...(o[k]||{}),...v};
   }
-  for(const id in o){const m=o[id]; m.id=id; m.T=m.s-1+m.a+m.r;}
+  for(const id in o){
+    const m=o[id]; m.id=id; m.T=m.s-1+m.a+m.r;
+    if(m.rehit&&!m._split){m.meter=Math.ceil(m.meter/Math.ceil(m.a/m.rehit)); m._split=true;} // 多段技のゲージ増加は合計で1技ぶん
+  }
   return o;
 }
 const SP={fresh:true,special:true}, SUP={fresh:true,super:true,meter:0,kd:true};
@@ -51,7 +54,7 @@ const CHARS=[
     desc:'踏み込む強攻撃と多段技で押し込む。立ち強→前強がつながり、中段は↓技。',
     col:{body:'#4da3ff',light:'#c8e4ff',dark:'#1a4a8a'}, col2:{body:'#7b6cff',light:'#dcd8ff',dark:'#2c2480'}, look:'spiky',
     moves:buildMoves({
-      '5M':{s:6,r:12,dmg:55,box:[20,80,100,30]},
+      '5M':{s:6,r:14,dmg:55,box:[20,80,100,30]},
       '5H':{name:'踏み込み突き',s:12,r:22,dmg:95,box:[20,70,125,40],moveVx:[4,11,500]},
       '6H':{name:'踏み込み蹴り',s:14,a:5,r:20,dmg:85,hs:0,guard:'mid',box:[25,50,110,60],kd:true,chain:4,cancel:true,moveVx:[6,13,700]},
       '2H':{s:9,r:24},
@@ -87,10 +90,10 @@ const CHARS=[
     col:{body:'#e86ad6',light:'#ffd6f8',dark:'#7a1f6e'}, col2:{body:'#4fd1c5',light:'#d2fbf6',dark:'#156a62'}, look:'tail',
     moves:buildMoves({
       '5L':{s:3,r:6,dmg:22,box:[20,105,68,22]},
-      '5M':{s:6,r:11,dmg:45},
+      '5M':{s:6,r:14,dmg:45},
       '5H':{s:9,r:17,dmg:75,hs:22},
       '2L':{s:3,r:6,dmg:20},
-      '2M':{s:6,r:11,dmg:42},
+      '2M':{s:6,r:13,dmg:42},
       '2H':{name:'蹴り上げ',s:9,a:5,r:22,dmg:60,guard:'mid',box:[15,40,80,120],kd:false,lift:true,jc:true},
       '6H':{s:16,r:16,dmg:70},
       'jL':{s:3,r:3,dmg:30,chain:1,cancel:true},
@@ -98,7 +101,7 @@ const CHARS=[
       'jH':{s:7,dmg:70,chain:3,cancel:true},
       'jS':{...SP,name:'急降下蹴り',s:6,a:20,r:6,dmg:60,hs:20,bs:12,box:[0,-20,60,60],air:true,dive:{vy:1400,vx:700},meter:40},
       'TH':{dmg:100},
-      'spN':{...SP,name:'連掌',s:6,a:13,r:14,dmg:28,rehit:4,hs:18,bs:12,box:[15,80,85,50],kb:150,meter:25},
+      'spN':{...SP,name:'連掌',s:6,a:13,r:18,dmg:28,rehit:4,hs:18,bs:12,box:[15,80,85,50],kb:150,meter:25},
       'spD':{...SP,name:'滑り蹴り',s:7,a:10,r:18,dmg:60,guard:'low',kd:true,bs:12,box:[0,0,85,22],crouch:true,moveVx:[7,16,1000]},
       'spU':{...SP,name:'燕返し',s:4,a:8,r:24,dmg:80,kd:true,bs:18,box:[5,60,65,110],kb:200,inv:[1,4],rise:{f:4,vx:150,vy:-1400}},
       'spF':{...SP,name:'影抜け（裏回り）',s:10,a:1,r:10,meter:10,inv:[5,10],tele:{f:8,off:70}},

@@ -10,6 +10,7 @@ const GRAV=80;
 const SP_LATE=5, JUMP_LATE=6, SP_RANK={spN:0,spF:1,spD:2,spU:3};
 // RC_COST: ブレイクアッパーの消費ゲージ / KARA: 出始め3F以内なら同時押し技（1=投げ・ブレイク、2=ブレイクのみ）に化けられる通常技 / JUGGLE: ブレイクで浮かせた相手に追撃できる回数
 const RC_COST=500, KARA={'5L':1,'2L':1,'5M':1,'2M':1,'5H':2,'2H':2,'6H':2,'TH':2}, JUGGLE=3, ALL3=16|32|64;
+const HS_FREE=4, HS_DECAY=1, HS_MIN=6; // のけぞり短縮：HS_FREE ヒットまでは通常、以降1ヒットごとに HS_DECAY フレーム短く（下限 HS_MIN）
 const TECH_WINDOW=10; // 投げ抜けの受付：つかまれてからこのフレーム数以内に 弱+中（つかまれる直前6F以内の入力も有効）
 const THROWABLE=new Set(['idle','walk','crouch','attack','land']);
 const MAX_METER=1000, ROUND_TIME=99*60, WIN_ROUNDS=2, BUF_LEN=6;
@@ -32,7 +33,7 @@ function newFighter(i,meter,ch){
   return{i,ch:ch|0,x:(i===0?330:670)*FX,y:FLOOR,vx:0,vy:0,push:0,facing:i===0?1:-1,air:false,crouch:false,
     hp:CHARS[ch|0].hp,meter:meter||0,state:'idle',t:0,move:null,mf:0,hitDone:false,hitConn:false,stun:0,inv:0,combo:0,
     prevIn:0,curIn:0,buf:{L:0,M:0,H:0,SP:0,SU:0},idleT:0,jt:0,canc:false,spIn:0,jug:0,airUsed:false,
-    pressed:0,aj:0,spc:0,gm:null,armorUsed:false,noSword:false};
+    pressed:0,aj:0,spc:0,gm:null,armorUsed:false,noSword:false,noGain:false};
 }
 function newState(mode,chars){
   chars=chars||[0,0];
@@ -131,6 +132,7 @@ function startMove(s,p,id,canc){
   for(const k of ATK_KEYS) p.buf[k]=0;
   if(m.air) p.airUsed=true;
   if(!p.air){p.vx=0; p.crouch=(id[0]==='2'||!!m.crouch);}
+  if(m.launcher||m.super) p.noGain=true; // ブレイク・必殺技を使ったコンボ中は、もうゲージが増えない（ゲージを回収しながら続く永久コンボの防止）
   if(m.launcher){p.meter-=RC_COST; s.events.push({type:'rc',i:p.i,x:p.x,y:p.y});}
   if(m.super){p.meter=0; s.freeze=45; s.freezeOwner=p.i; s.events.push({type:'super',i:p.i});}
 }
@@ -168,7 +170,7 @@ function attackTick(s,p){
 function updateFighter(s,p,o){
   const inp=p.curIn, canAct=s.phase==='fight', C=CHARS[p.ch];
   p.inv=0;
-  if(ACTIONABLE.has(p.state)) p.combo=0;
+  if(ACTIONABLE.has(p.state)){p.combo=0; o.noGain=false;} // コンボが切れたら、相手のゲージ増加停止も解除
   if(!p.air&&(p.state==='idle'||p.state==='walk'||p.state==='crouch'||p.state==='land')){
     if(o.x>p.x) p.facing=1; else if(o.x<p.x) p.facing=-1;
   }
@@ -377,7 +379,8 @@ function applyHit(s,e){
     d.state='blockstun'; d.stun=m.bs; d.move=null; d.vx=0; d.push=dir*kb;
     const chip=m.chip!=null?m.chip:(special?(m.dmg/8|0):0);
     d.hp=Math.max(0,d.hp-chip);
-    a.meter=Math.min(MAX_METER,a.meter+(m.meter>>1)); d.meter=Math.min(MAX_METER,d.meter+15);
+    if(!a.noGain) a.meter=Math.min(MAX_METER,a.meter+(m.meter>>1));
+    d.meter=Math.min(MAX_METER,d.meter+15);
     s.hitstop=8;
     if(!proj) adv=m.bs-(m.T-a.mf);
     s.events.push({type:'block',x:e.px,y:e.py});
@@ -385,7 +388,8 @@ function applyHit(s,e){
     const scale=Math.max(m.super?50:30,100-10*Math.max(0,d.combo-1));
     const dmg=(m.dmg*power*scale/10000)|0;
     d.hp=Math.max(0,d.hp-dmg); d.combo++;
-    a.meter=Math.min(MAX_METER,a.meter+m.meter); d.meter=Math.min(MAX_METER,d.meter+(dmg>>1));
+    if(!a.noGain) a.meter=Math.min(MAX_METER,a.meter+m.meter);
+    d.meter=Math.min(MAX_METER,d.meter+(dmg>>1));
     d.move=null;
     if(s.mode==='training'&&d.hp<1) d.hp=1;
     if(m.kd||m.lift||!m.hs||d.air||d.hp<=0){
@@ -397,8 +401,10 @@ function applyHit(s,e){
       else if(m.lift&&!wasLaunch) d.jug=2; // 浮いている相手に当て直しても追撃回数は増えない
       if(!proj) adv='down';
     }else{
-      d.state='hitstun'; d.stun=m.hs; d.vx=0; d.push=dir*kb;
-      if(!proj) adv=m.hs-(m.T-a.mf);
+      // コンボが長くなるほどのけぞりが短くなる（4ヒット目から1発ごとに-1F）。目押しで延々つなぐ永久コンボを止める
+      const hs=Math.max(HS_MIN,m.hs-Math.max(0,d.combo-HS_FREE)*HS_DECAY);
+      d.state='hitstun'; d.stun=hs; d.vx=0; d.push=dir*kb;
+      if(!proj) adv=hs-(m.T-a.mf);
     }
     s.hitstop=m.super?26:(m.dmg>=90?13:(m.dmg>=50?10:8));
     s.events.push({type:'hit',x:e.px,y:e.py,big:m.dmg>=90||!!m.super,owner:a.i,combo:d.combo});
