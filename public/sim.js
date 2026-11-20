@@ -140,7 +140,7 @@ function spawnProj(s,p,m){
   const j=m.proj;
   if(s.projs.filter(q=>q.owner===p.i&&q.src===m.id).length>=(j.max||1)) return;
   s.projs.push({owner:p.i,src:m.id,kind:j.kind||'ball',phase:0,x:p.x+p.facing*60*FX,y:p.y-j.y*FX,vx:j.vx*p.facing,vy:j.vy||0,
-    w:j.w,h:j.h,life:j.life,stick:j.stick||0,fuse:0,heavy:!!j.heavy,breaker:!!j.breaker,ex:j.ex||null,hitDone:false,
+    w:j.w,h:j.h,life:j.life,stick:j.stick||0,fuse:0,heavy:!!j.heavy,breaker:!!j.breaker,solid:!!j.solid,ex:j.ex||null,hitDone:false,
     canc:p.canc,name:m.name,dmg:j.dmg,hs:j.hs,bs:j.bs,guard:j.guard||'mid',kb:400,meter:30,special:true,kd:!!j.kd,dead:false});
 }
 // 刺さった剣を爆発させる（爆発は数フレームだけ当たり判定が出る）
@@ -299,7 +299,10 @@ function updateProjs(s){
     const A=live[i],B=live[j];
     if(A.owner!==B.owner&&Math.abs(A.x-B.x)<(A.w+B.w)*FX/2&&Math.abs(A.y-B.y)<(A.h+B.h)*FX/2){
       // 重い弾は普通の弾を消して進む。ただし breaker の弾は重い弾とも相殺する
-      if(A.heavy===B.heavy||(A.heavy?B.breaker:A.breaker)) A.dead=B.dead=true; else if(A.heavy) B.dead=true; else A.dead=true;
+      // solid の弾はどの弾にも消されない（solid 同士はすり抜ける）
+      if(A.solid&&B.solid) continue;
+      if(A.solid) B.dead=true; else if(B.solid) A.dead=true;
+      else if(A.heavy===B.heavy||(A.heavy?B.breaker:A.breaker)) A.dead=B.dead=true; else if(A.heavy) B.dead=true; else A.dead=true;
       s.events.push({type:'clash',x:(A.x+B.x)>>1,y:A.y});
     }
   }

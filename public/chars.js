@@ -7,7 +7,7 @@
 //   kd=ダウンを奪う  lift=浮かせる（追撃2回まで）  jc=当たったらジャンプでキャンセル可
 //   rehit=nフレームごとに多段ヒット  moveVx=[開始F,終了F,速度] 前進  rise=飛び上がる  lv=[縦,横] 浮かせ方の指定
 //   throw=投げ（ガード不可） notech=投げ抜け不可  armor=[開始F,終了F] 1発耐える  inv=[開始F,終了F] 無敵
-//   proj=飛び道具（max=同時に出せる数 stick=壁に刺さってから爆発までのF ex=爆発 heavy=普通の弾を消して進む breaker=heavy の弾とも相殺）
+//   proj=飛び道具（max=同時に出せる数 stick=壁に刺さってから爆発までのF ex=爆発 heavy=普通の弾を消して進む breaker=heavy の弾とも相殺 solid=どの弾にも消されない）
 //   land=空中技の着地硬直
 //   sword=剣を使う技（剣を投げている間はリーチ45%・威力60%）  alt=剣を投げている間に化ける技
 'use strict';
@@ -145,7 +145,7 @@ const CHARS=[
       'spN':{...SP,name:'光弾',s:10,a:1,r:24,meter:15,proj:{kind:'ball',vx:1000,dmg:55,hs:18,bs:13,w:36,h:26,y:105,life:110,max:2,breaker:true}}, // ツルギの投剣とも相殺できる
       'spD':{...SP,name:'地這い（下段）',s:13,a:1,r:28,meter:20,proj:{kind:'wave',vx:650,dmg:60,hs:19,bs:13,w:60,h:30,y:15,life:140,guard:'low'}},
       'spU':{...SP,name:'対空弾',s:9,a:1,r:28,meter:20,proj:{kind:'ball',vx:700,vy:-700,dmg:70,hs:0,bs:14,w:40,h:40,y:130,life:60,kd:true}},
-      'spF':{...SP,name:'重光球',s:18,a:1,r:30,meter:25,proj:{kind:'orb',vx:260,dmg:90,hs:24,bs:18,w:70,h:70,y:95,life:260,heavy:true}},
+      'spF':{...SP,name:'重光球',s:18,a:1,r:30,meter:25,proj:{kind:'orb',vx:260,dmg:90,hs:24,bs:18,w:70,h:70,y:95,life:260,heavy:true,solid:true}}, // どの飛び道具にも消されない
       'SU':{...SUP,name:'極光砲',s:10,a:18,r:36,dmg:300,bs:22,box:[40,60,760,70],inv:[1,6],chip:60,beam:true},
     }) },
 ];
