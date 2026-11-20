@@ -8,7 +8,7 @@
 //   rehit=nフレームごとに多段ヒット  moveVx=[開始F,終了F,速度] 前進  rise=飛び上がる  lv=[縦,横] 浮かせ方の指定
 //   throw=投げ（ガード不可） notech=投げ抜け不可  armor=[開始F,終了F] 1発耐える  inv=[開始F,終了F] 無敵
 //   proj=飛び道具（max=同時に出せる数 stick=壁に刺さってから爆発までのF ex=爆発 heavy=普通の弾を消して進む breaker=heavy の弾とも相殺 solid=どの弾にも消されない）
-//   land=空中技の着地硬直
+//   land=空中技の着地硬直  landHit=当てたときは相手よりこのフレーム数だけ早く動ける  once=その効果は1コンボに1回だけ
 //   sword=剣を使う技（剣を投げている間はリーチ45%・威力60%）  alt=剣を投げている間に化ける技
 'use strict';
 const BASE_MOVES={
@@ -100,7 +100,7 @@ const CHARS=[
       'jL':{s:3,r:3,dmg:30,chain:1,cancel:true},
       'jM':{s:5,dmg:48,chain:2,cancel:true},
       'jH':{s:7,dmg:70,chain:3,cancel:true},
-      'jS':{...SP,name:'急降下蹴り',s:6,a:20,r:6,dmg:60,hs:20,bs:12,box:[0,-20,60,60],air:true,dive:{vy:1400,vx:700},meter:40,land:18}, // 着地硬直が長く、当てても着地から技につながらない
+      'jS':{...SP,name:'急降下蹴り',s:6,a:20,r:6,dmg:60,hs:20,bs:12,box:[0,-20,60,60],air:true,dive:{vy:1400,vx:700},meter:40,land:18,landHit:4,once:true}, // 当てると4F有利（1コンボ1回だけ）。ガードされるか2回目は着地硬直18F
       'TH':{dmg:100},
       'spN':{...SP,name:'連掌',s:6,a:13,r:18,dmg:28,rehit:4,hs:18,bs:12,box:[15,80,85,50],kb:150,meter:25},
       'spD':{...SP,name:'滑り蹴り',s:7,a:10,r:18,dmg:60,guard:'low',kd:true,bs:12,box:[0,0,85,22],crouch:true,moveVx:[7,16,1000]},

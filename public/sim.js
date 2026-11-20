@@ -33,7 +33,8 @@ function newFighter(i,meter,ch){
   return{i,ch:ch|0,x:(i===0?330:670)*FX,y:FLOOR,vx:0,vy:0,push:0,facing:i===0?1:-1,air:false,crouch:false,
     hp:CHARS[ch|0].hp,meter:meter||0,state:'idle',t:0,move:null,mf:0,hitDone:false,hitConn:false,stun:0,inv:0,combo:0,
     prevIn:0,curIn:0,buf:{L:0,M:0,H:0,SP:0,SU:0},idleT:0,jt:0,canc:false,spIn:0,jug:0,airUsed:false,
-    pressed:0,aj:0,spc:0,gm:null,armorUsed:false,noSword:false,noGain:false};
+    pressed:0,aj:0,spc:0,gm:null,armorUsed:false,noSword:false,noGain:false,
+    once:[],fresh:false}; // once=今のコンボで食らった「1コンボ1回」技 / fresh=いま出している技がその1回目として当たった
 }
 function newState(mode,chars){
   chars=chars||[0,0];
@@ -121,7 +122,7 @@ function canCancel(p,f,t){
 function startMove(s,p,id,canc){
   const m=MV(p,id), from=p.state==='attack'&&p.move?MV(p):null;
   p.spc=canc&&from&&from.special&&m.special?p.spc+1:0;
-  p.armorUsed=false;
+  p.armorUsed=false; p.fresh=false;
   if((m.super||m.launcher)&&p.air){p.y=FLOOR; p.vy=0; p.air=false;} // 昇竜拳からのキャンセルは地上に戻って出す
   p.state='attack'; p.move=id; p.mf=0; p.hitDone=false; p.hitConn=false; p.canc=!!canc;
   if(canc&&m.box){ // キャンセルで出した打撃は、離れていたら出始めに間合いを詰める（最大110px）
@@ -170,7 +171,7 @@ function attackTick(s,p){
 function updateFighter(s,p,o){
   const inp=p.curIn, canAct=s.phase==='fight', C=CHARS[p.ch];
   p.inv=0;
-  if(ACTIONABLE.has(p.state)){p.combo=0; o.noGain=false;} // コンボが切れたら、相手のゲージ増加停止も解除
+  if(ACTIONABLE.has(p.state)){p.combo=0; o.noGain=false; if(p.once.length) p.once=[];} // コンボが切れたら、相手のゲージ増加停止も解除
   if(!p.air&&(p.state==='idle'||p.state==='walk'||p.state==='crouch'||p.state==='land')){
     if(o.x>p.x) p.facing=1; else if(o.x<p.x) p.facing=-1;
   }
@@ -239,7 +240,7 @@ function updateFighter(s,p,o){
         if(--p.t<=0) applyHit(s,{a:o,d:p,m:tm,proj:null,px:(o.x+p.x)>>1,py:p.y-90*FX});
       }
       break;
-    case 'down': p.inv=1; p.combo=0; if(--p.t<=0){p.state='getup'; p.t=18;} break;
+    case 'down': p.inv=1; p.combo=0; if(p.once.length) p.once=[]; if(--p.t<=0){p.state='getup'; p.t=18;} break;
     case 'getup': p.inv=1; if(--p.t<=0) p.state='idle'; break;
     case 'launch': case 'ko': p.inv=1; break;
   }
@@ -248,7 +249,15 @@ function updateFighter(s,p,o){
 function onLand(s,p){
   switch(p.state){
     case 'jump': p.state='land'; p.t=3; p.vx=0; break;
-    case 'attack':{const m=MV(p); p.move=null; p.state='land'; p.t=m&&m.land?m.land:(m&&m.air?4:12); /* land=その技の着地硬直 */ p.vx=0; break;}
+    case 'attack':{
+      const m=MV(p), o=s.p[1-p.i];
+      p.move=null; p.state='land'; p.vx=0;
+      p.t=m&&m.land?m.land:(m&&m.air?4:12); // land=その技の着地硬直
+      if(m&&m.landHit!==undefined&&p.fresh){
+        // 当てたとき（そのコンボで1回目だけ）は、相手ののけぞりより landHit フレーム早く動けるように着地硬直を合わせる
+        p.t=o.state==='hitstun'?Math.max(2,Math.min(m.land,o.stun-m.landHit)):6;
+      }
+      break;}
     case 'launch':
       p.vx=0; p.jug=0;
       if(p.hp<=0&&s.mode!=='training'){p.state='ko';}
@@ -393,16 +402,19 @@ function applyHit(s,e){
     const scale=Math.max(m.super?50:30,100-10*Math.max(0,d.combo-1));
     const dmg=(m.dmg*power*scale/10000)|0;
     d.hp=Math.max(0,d.hp-dmg); d.combo++;
+    if(!proj&&m.once){a.fresh=!d.once.includes(m.id); if(a.fresh) d.once.push(m.id);} // 1コンボ1回の技
     if(!a.noGain) a.meter=Math.min(MAX_METER,a.meter+m.meter);
     d.meter=Math.min(MAX_METER,d.meter+(dmg>>1));
     d.move=null;
     if(s.mode==='training'&&d.hp<1) d.hp=1;
-    if(m.kd||m.lift||!m.hs||d.air||d.hp<=0){
+    const slam=!proj&&!!m.once&&!a.fresh; // 1コンボ1回の技の2回目：叩き落としてダウンさせ、コンボを終わらせる
+    if(slam||m.kd||m.lift||!m.hs||d.air||d.hp<=0){
       d.state='launch'; d.air=true; d.crouch=false;
       // ダウン技は高く・近くに浮かせて、キャンセルした追撃が届くようにする
-      const lv=m.lv||(m.super?[-1300,520]:m.launcher?[-1500,60]:m.lift?[-1350,80]:m.kd?[-1200,150]:[-950,360]);
+      const lv=slam?[500,200]:m.lv||(m.super?[-1300,520]:m.launcher?[-1500,60]:m.lift?[-1350,80]:m.kd?[-1200,150]:[-950,360]);
       d.vy=lv[0]; d.vx=dir*lv[1]; d.push=0;
-      if(m.launcher) d.jug=JUGGLE;
+      if(slam) d.jug=0;
+      else if(m.launcher) d.jug=JUGGLE;
       else if(m.lift&&!wasLaunch) d.jug=2; // 浮いている相手に当て直しても追撃回数は増えない
       if(!proj) adv='down';
     }else{
