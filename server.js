@@ -62,13 +62,15 @@ wss.on('connection', ws => {
       let players = rooms.get(code);
       if (!players) { players = []; rooms.set(code, players); }
       if (players.length >= 2) { send(ws, { t: 'full' }); return; }
+      ws.ch = Number.isInteger(m.ch) && m.ch >= 0 && m.ch < 32 ? m.ch : 0; // 使うキャラ（番号の意味はクライアント側 chars.js）
       players.push(ws); ws.room = code;
       if (players.length === 1) send(ws, { t: 'wait', room: code });
       else {
         const seed = (Math.random() * 0xffffffff) >>> 0;
         players[0].peer = players[1]; players[1].peer = players[0];
-        send(players[0], { t: 'start', you: 0, seed });
-        send(players[1], { t: 'start', you: 1, seed });
+        const chars = [players[0].ch, players[1].ch];
+        send(players[0], { t: 'start', you: 0, seed, chars });
+        send(players[1], { t: 'start', you: 1, seed, chars });
       }
     }
   });

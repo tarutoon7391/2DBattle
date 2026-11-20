@@ -3,11 +3,13 @@
 // (1) 確定した状態が両者で一致するか (2) スローにならないか を確認する。サーバー不要:  node test/netcode.test.js
 const fs = require('fs'), path = require('path');
 const { createSession } = require('../public/net.js');
-const simSrc = fs.readFileSync(path.join(__dirname, '../public/sim.js'), 'utf8');
+const simSrc = fs.readFileSync(path.join(__dirname, '../public/chars.js'), 'utf8') + '\n' + fs.readFileSync(path.join(__dirname, '../public/sim.js'), 'utf8');
 const makeSim = () => new Function(simSrc + ';return{newState,step,cleanInput};')();
 const FRAME = 1000 / 60, GOAL = 1800; // 30秒ぶん
 
+let caseNo = 0;
 function run({ name, latency, jitter, loss }) {
+  const chars = [caseNo % 6, (caseNo * 2 + 3) % 6]; caseNo++; // ケースごとに違うキャラの組み合わせ
   let t = 0, seq = 0, r = 12345;
   const rand = () => (r = (r * 16807) % 2147483647) / 2147483647;
   const q = [];
@@ -19,7 +21,7 @@ function run({ name, latency, jitter, loss }) {
       if (rand() < loss) return;
       const s = JSON.stringify(o);
       at(latency + rand() * jitter, () => peers[1 - i].ses.onMessage(JSON.parse(s)));
-    }, () => t, sim.newState('online'), (st, inp) => { sim.step(st, inp); return st; });
+    }, () => t, sim.newState('online', chars), (st, inp) => { sim.step(st, inp); return st; });
     p.ses.onSync = (f, st) => { if (f === GOAL) { p.snap = JSON.stringify({ ...st, events: [] }); p.doneAt = t; } };
     return p;
   });

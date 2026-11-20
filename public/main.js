@@ -1,8 +1,13 @@
 // ================= 入力・描画・オンライン通信 =================
 'use strict';
 const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
-const COL=[{body:'#ff6a4d',light:'#ffd0b8',dark:'#8a2a1a'},{body:'#4da3ff',light:'#c8e4ff',dark:'#1a4a8a'}];
-let S=newState('cpu'), showBoxes=false, dummyGuard=true;
+// 色はキャラごと。同キャラ対戦のときだけ P2 が色違いになる
+function colOf(p){const c=CHARS[p.ch]; return p.col||((p.i===1&&S.p[0].ch===S.p[1].ch)?c.col2:c.col);}
+const COLP=i=>colOf(S.p[i]);
+let S=newState('cpu',[0,1]), showBoxes=false, dummyGuard=true;
+let selT=0;
+let sel=null;      // キャラクター選択中はここに状態が入る（null なら試合中）
+let myChar=0;      // オンラインで自分が使うキャラ
 
 // ---------- 入力 ----------
 const keys=new Set();
@@ -15,7 +20,9 @@ const KEY_P2={ArrowUp:BT.UP,ArrowDown:BT.DOWN,ArrowLeft:BT.LEFT,ArrowRight:BT.RI
 addEventListener('keydown',e=>{
   if(e.target&&e.target.tagName==='INPUT') return;
   if(e.code==='F2'){e.preventDefault(); toggleBoxes(); return;}
-  if(e.code==='KeyR'&&S.mode==='training'&&!e.repeat){setMode('training'); return;} // トレーニングのリセット
+  if(sel){e.preventDefault(); if(!e.repeat) selKey(e.code); return;}
+  if(e.code==='Escape'){setMode(S.mode); return;} // キャラクター選択へ戻る
+  if(e.code==='KeyR'&&S.mode==='training'&&!e.repeat){restart(); return;} // トレーニングのリセット
   if(KEY_P1[e.code]!=null||KEY_P2[e.code]!=null||e.code==='Space') e.preventDefault();
   keys.add(e.code);
 });
@@ -43,20 +50,140 @@ function pname(i){
   if(S.mode==='online') return (i===0?'P1':'P2')+(net&&net.you===i?'（あなた）':'');
   return i===0?'P1':(S.mode==='2p'?'P2':S.mode==='cpu'?'CPU':'DUMMY');
 }
+// モードを選ぶ → まずキャラクター選択へ
 function setMode(mode){
-  if(mode!=='online'||S.mode!=='online') leaveOnline();
-  S=newState(mode); S.dummyGuard=dummyGuard; resetFx();
-  onlinePanel.hidden=mode!=='online';
-  if(mode==='online'&&!net) setStatus('ルームコードを決めて「入室」。空欄ならランダムマッチ');
+  leaveOnline();
   modeBtns.forEach(b=>b.classList.toggle('on',b.dataset.mode===mode));
   btnGuard.disabled=mode!=='training';
+  onlinePanel.hidden=true;
+  openSelect(mode);
   cv.focus();
+}
+function startGame(mode,chars){
+  sel=null; keys.clear();
+  S=newState(mode,chars); S.dummyGuard=dummyGuard; resetFx();
+  if(mode==='online'){
+    myChar=chars[0]; onlinePanel.hidden=false;
+    setStatus(`${CHARS[myChar].name} で対戦。ルームコードを決めて「入室」。空欄ならランダムマッチ`);
+  }
+  cv.focus();
+}
+function restart(){ // 同じキャラでもう一度
+  if(S.mode==='online') return;
+  S=newState(S.mode,S.chars); S.dummyGuard=dummyGuard; resetFx();
+}
+
+// ---------- キャラクター選択 ----------
+// cur=カーソル位置（0〜5がキャラ、6がおまかせ） done=決定済みか
+// 2P対戦は2人同時に選ぶ。CPU対戦・トレーニングは自分→相手の順に1人で選ぶ。オンラインは自分だけ。
+const SEL_COLS=4, SEL_N=CHARS.length+1, SEL_X=36, SEL_Y=62, SEL_W=220, SEL_H=150, SEL_GAP=16;
+function openSelect(mode){
+  sel={mode,both:mode==='2p',step:0,cur:[S.chars?S.chars[0]:0,mode==='2p'?(S.chars?S.chars[1]:1):CHARS.length],done:[false,false],pick:[0,0]};
+}
+function selMove(i,dx,dy){
+  if(sel.done[i]) return;
+  let c=sel.cur[i]%SEL_COLS+dx, r=(sel.cur[i]/SEL_COLS|0)+dy;
+  c=(c+SEL_COLS)%SEL_COLS; r=(r+2)%2;
+  let n=r*SEL_COLS+c; if(n>=SEL_N) n=dx?(dx>0?SEL_COLS:SEL_N-1):SEL_N-1;
+  sel.cur[i]=n;
+}
+function selConfirm(i){
+  if(sel.done[i]) return;
+  sel.pick[i]=sel.cur[i]>=CHARS.length?Math.floor(Math.random()*CHARS.length):sel.cur[i];
+  sel.done[i]=true;
+  if(sel.mode==='online'){startGame('online',[sel.pick[0],sel.pick[0]]); return;}
+  if(!sel.both&&i===0) sel.step=1;
+  if(sel.done[0]&&sel.done[1]) startGame(sel.mode,[sel.pick[0],sel.pick[1]]);
+}
+function selBack(i){
+  if(sel.both){sel.done[i]=false; return;}
+  if(sel.step===1){sel.step=0; sel.done[0]=false;}
+}
+function selKey(code){
+  const A={KeyA:[-1,0],KeyD:[1,0],KeyW:[0,-1],KeyS:[0,1]}, B={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]};
+  const okA=code==='KeyJ'||code==='Space', okB=code==='Comma'||code==='Numpad1', backA=code==='KeyK', backB=code==='Period'||code==='Numpad2';
+  if(sel.both){ // 2人同時：P1は左側のキー、P2は右側のキー
+    if(A[code]) selMove(0,...A[code]); else if(B[code]) selMove(1,...B[code]);
+    else if(okA) selConfirm(0); else if(okB||code==='Enter') selConfirm(1);
+    else if(backA||code==='Escape') selBack(0); else if(backB) selBack(1);
+  }else{ // 1人で順番に：どちらのキーでも操作できる
+    const i=sel.step, d=A[code]||B[code];
+    if(d) selMove(i,...d); else if(okA||okB||code==='Enter') selConfirm(i); else if(backA||backB||code==='Escape') selBack(i);
+  }
+}
+cv.addEventListener('click',e=>{
+  if(!sel) return;
+  const r=cv.getBoundingClientRect(), x=(e.clientX-r.left)*W/r.width, y=(e.clientY-r.top)*H/r.height;
+  for(let n=0;n<SEL_N;n++){
+    const cx=SEL_X+(n%SEL_COLS)*(SEL_W+SEL_GAP), cy=SEL_Y+(n/SEL_COLS|0)*(SEL_H+SEL_GAP);
+    if(x>=cx&&x<cx+SEL_W&&y>=cy&&y<cy+SEL_H){
+      const i=sel.both?(sel.done[0]?1:0):sel.step;
+      if(sel.cur[i]===n) selConfirm(i); else if(!sel.done[i]) sel.cur[i]=n; // 1回目で選択、同じ所をもう一度で決定
+      return;
+    }
+  }
+});
+function wrapText(str,x,y,maxW,lineH,size,color){
+  ctx.font=`600 ${size}px system-ui,"Hiragino Sans","Noto Sans JP",sans-serif`; ctx.textAlign='left'; ctx.textBaseline='middle'; ctx.fillStyle=color;
+  let line='';
+  for(const ch of str){ if(ctx.measureText(line+ch).width>maxW){ctx.fillText(line,x,y); y+=lineH; line=ch;} else line+=ch; }
+  if(line) ctx.fillText(line,x,y);
+  return y+lineH;
+}
+function drawSelInfo(n,x,w,tag,tagCol){
+  ctx.fillStyle='rgba(20,22,30,.92)'; rr(x,394,w,140,10);
+  if(n>=CHARS.length){
+    text(tag+'  おまかせ',x+16,416,20,tagCol,'left',false);
+    wrapText('6人の中からランダムに選ぶ。',x+16,446,w-32,20,14,'#c9cbd6'); return;
+  }
+  const c=CHARS[n], m=c.moves;
+  text(`${tag}  ${c.name}`,x+16,416,20,tagCol,'left',false);
+  text(`${c.type} ／ 体力 ${c.hp}`,x+w-16,416,13,'#9a9cab','right',false);
+  const y=wrapText(c.desc,x+16,442,w-32,18,13,'#e9e9ee');
+  wrapText(`技：${m.spN.name}／↓${m.spD.name}／↑${m.spU.name}／→${m.spF.name}${m.jS?'／空中 '+m.jS.name:''}　必殺技：${m.SU.name}`,x+16,Math.max(y+2,490),w-32,17,12,'#9a9cab');
+}
+function renderSelect(){
+  ctx.drawImage(bg,0,0); ctx.fillStyle='rgba(8,8,14,.72)'; ctx.fillRect(0,0,W,H);
+  const modeName={cpu:'CPU対戦',['2p']:'2P対戦',training:'トレーニング',online:'オンライン対戦'}[sel.mode];
+  const who=sel.both?'':(sel.step===0?'あなたのキャラを選ぶ':(sel.mode==='cpu'?'CPUのキャラを選ぶ':'ダミーのキャラを選ぶ'));
+  text('キャラクター選択',36,30,24,'#fff','left',false);
+  text(modeName+(who?' ― '+who:''),W-36,30,16,'#ffd34d','right',false);
+  const P=[{c:'#ffd34d',t:sel.both?'1P':(sel.step===0?'YOU':'')},{c:'#7ef0ff',t:sel.both?'2P':(sel.mode==='cpu'?'CPU':'DUMMY')}];
+  for(let n=0;n<SEL_N;n++){
+    const x=SEL_X+(n%SEL_COLS)*(SEL_W+SEL_GAP), y=SEL_Y+(n/SEL_COLS|0)*(SEL_H+SEL_GAP);
+    ctx.fillStyle='rgba(30,33,45,.95)'; rr(x,y,SEL_W,SEL_H,10);
+    if(n<CHARS.length){
+      const c=CHARS[n];
+      ctx.save(); ctx.beginPath(); ctx.rect(x,y,SEL_W,SEL_H); ctx.clip();
+      ctx.translate(x+62,y+SEL_H-8); ctx.scale(0.62,0.62); ctx.translate(0,-FLOOR/FX);
+      drawFighter({i:0,ch:n,x:0,y:FLOOR,facing:1,state:'idle',air:false,crouch:false,move:null,mf:0,col:c.col,noSword:false});
+      ctx.restore();
+      text(c.name,x+SEL_W-14,y+26,20,c.col.light,'right',false);
+      text(c.type,x+SEL_W-14,y+50,12,'#9a9cab','right',false);
+      text('体力 '+c.hp,x+SEL_W-14,y+70,12,'#9a9cab','right',false);
+    }else{
+      text('？',x+62,y+SEL_H/2,64,'#5a5e70','center',false);
+      text('おまかせ',x+SEL_W-14,y+26,20,'#c9cbd6','right',false);
+    }
+    // カーソル
+    for(let i=0;i<2;i++){
+      const active=sel.both||i===sel.step||sel.done[i];
+      if(!active||sel.cur[i]!==n||(!sel.both&&i===1&&sel.step===0)) continue;
+      ctx.strokeStyle=P[i].c; ctx.lineWidth=sel.done[i]?5:3; ctx.setLineDash(sel.done[i]?[]:[10,6]); ctx.lineDashOffset=-selT;
+      ctx.beginPath(); if(ctx.roundRect) ctx.roundRect(x+2+i*5,y+2+i*5,SEL_W-4-i*10,SEL_H-4-i*10,9); else ctx.rect(x+2,y+2,SEL_W-4,SEL_H-4); ctx.stroke(); ctx.setLineDash([]);
+      ctx.fillStyle=P[i].c; rr(x+(i?SEL_W-64:8),y+SEL_H-30,56,22,6);
+      text(sel.done[i]?'OK':P[i].t,x+(i?SEL_W-36:36),y+SEL_H-19,13,'#111','center',false);
+    }
+  }
+  if(sel.both){ drawSelInfo(sel.cur[0],36,456,'1P','#ffd34d'); drawSelInfo(sel.cur[1],508,456,'2P','#7ef0ff'); }
+  else drawSelInfo(sel.cur[sel.step],36,928,sel.step===0?'YOU':P[1].t,P[sel.step].c);
+  text(sel.both?'1P：A/D/W/Sで選んで J で決定（K で戻る）　　2P：矢印キーで選んで , で決定（. で戻る）':'A/D/W/S か 矢印キーで選ぶ　J・Enter・クリック2回で決定　K・Esc で戻る',W/2,H-13,12,'#9a9cab','center',false);
 }
 modeBtns.forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
 function toggleBoxes(){showBoxes=!showBoxes; btnBoxes.innerHTML=`判定表示 ${showBoxes?'ON':'OFF'} <kbd>F2</kbd>`; btnBoxes.classList.toggle('on',showBoxes);}
 btnBoxes.onclick=()=>{toggleBoxes(); cv.focus();};
 btnGuard.onclick=()=>{dummyGuard=!dummyGuard; S.dummyGuard=dummyGuard; btnGuard.textContent=`ダミーガード ${dummyGuard?'ON':'OFF'}`; btnGuard.classList.toggle('on',dummyGuard); cv.focus();};
-document.getElementById('btnReset').onclick=()=>{if(S.mode!=='online') setMode(S.mode);};
+document.getElementById('btnReset').onclick=()=>{if(sel) return; restart(); cv.focus();};
 
 // ---------- オンライン ----------
 // 同期の中身は net.js（ロールバック方式）。ここは「つなぐ」部分だけ：
@@ -121,15 +248,16 @@ function joinOnline(){
   try{ws=new WebSocket((location.protocol==='https:'?'wss':'ws')+'://'+location.host+'/ws');}
   catch(e){setStatus('サーバーに接続できません'); return;}
   const n={ws,ses:null,pc:null,dc:null,you:-1,seed:0,started:false,matched:false,timer:0,pingT:0,sig:Promise.resolve()};
-  net=n; S=newState('online'); resetFx(); setStatus('接続中…');
-  ws.onopen=()=>ws.send(JSON.stringify({t:'join',room}));
+  net=n; S=newState('online',[myChar,myChar]); resetFx(); setStatus('接続中…');
+  ws.onopen=()=>ws.send(JSON.stringify({t:'join',room,ch:myChar}));
   ws.onmessage=ev=>{
     if(net!==n) return;
     let m; try{m=JSON.parse(ev.data);}catch(e){return;}
     if(m.t==='wait') setStatus(room?`ルーム「${room}」で相手を待っています…（相手にも同じコードを入れてもらう）`:'対戦相手を探しています…');
     else if(m.t==='start'){
       n.you=m.you; n.seed=m.seed; n.matched=true;
-      const st=newState('online'); st.rng=m.seed>>>0;
+      const ok=c=>Number.isInteger(c)&&c>=0&&c<CHARS.length?c:0, cs=Array.isArray(m.chars)?m.chars:[0,0];
+      const st=newState('online',[ok(cs[0]),ok(cs[1])]); st.rng=m.seed>>>0;
       n.ses=createSession(m.you,o=>netSend(n,o),()=>performance.now(),st,onlineStep);
       setStatus('相手が見つかりました。接続を確立中…');
       if(!FORCE_RELAY) setupRtc(n);
@@ -148,7 +276,7 @@ const FORCE_RELAY=/[?&]relay=1/.test(location.search); // 動作確認用：URL�
 const ATK_BITS=BT.L|BT.M|BT.H|BT.SP|BT.SU;
 // オンラインの1フレーム。巻き戻して何度も呼ばれるので、state と入力だけで結果が決まること
 function onlineStep(st,inp){
-  if(st.phase==='end'&&st.pt>60&&((inp[0]|inp[1])&ATK_BITS)){const seed=st.rng; st=newState('online'); st.rng=seed;} // 再戦
+  if(st.phase==='end'&&st.pt>60&&((inp[0]|inp[1])&ATK_BITS)){const seed=st.rng; st=newState('online',st.chars); st.rng=seed;} // 再戦（同じキャラ）
   step(st,inp);
   return st;
 }
@@ -162,12 +290,12 @@ document.getElementById('btnJoin').onclick=joinOnline;
 roomInput.addEventListener('keydown',e=>{if(e.key==='Enter') joinOnline();});
 
 // ---------- 演出（描画専用・シミュには影響しない） ----------
-let fx=[], shake=0, hpDisp=[MAX_HP,MAX_HP], comboShow=[{n:0,t:0},{n:0,t:0}];
-function resetFx(){fx=[]; shake=0; hpDisp=[MAX_HP,MAX_HP]; comboShow=[{n:0,t:0},{n:0,t:0}];}
+let fx=[], shake=0, hpDisp=[S.p[0].hp,S.p[1].hp], comboShow=[{n:0,t:0},{n:0,t:0}];
+function resetFx(){fx=[]; shake=0; hpDisp=[S.p[0].hp,S.p[1].hp]; comboShow=[{n:0,t:0},{n:0,t:0}];}
 function takeEvents(){
   for(const e of S.events){
     if(e.type==='hit'){
-      fx.push({k:'hit',x:e.x/FX,y:e.y/FX,t:0,max:e.big?22:14,big:e.big,c:COL[e.owner].light});
+      fx.push({k:'hit',x:e.x/FX,y:e.y/FX,t:0,max:e.big?22:14,big:e.big,c:COLP(e.owner).light});
       shake=Math.max(shake,e.big?9:4);
       comboShow[e.owner]={n:e.combo,t:80};
     }else if(e.type==='block') fx.push({k:'block',x:e.x/FX,y:e.y/FX,t:0,max:12});
@@ -175,7 +303,11 @@ function takeEvents(){
     else if(e.type==='clash') fx.push({k:'hit',x:e.x/FX,y:e.y/FX,t:0,max:16,big:true,c:'#fff'});
     else if(e.type==='thud'){fx.push({k:'dust',x:e.x/FX,y:e.y/FX,t:0,max:20}); shake=Math.max(shake,3);}
     else if(e.type==='super') fx.push({k:'superflash',t:0,max:45,i:e.i});
-    else if(e.type==='rc'){fx.push({k:'rc',x:e.x/FX,y:e.y/FX-80,t:0,max:18,c:COL[e.i].light}); shake=Math.max(shake,5);}
+    else if(e.type==='boom'){fx.push({k:'hit',x:e.x/FX,y:e.y/FX,t:0,max:24,big:true,c:'#ffd34d'}); shake=Math.max(shake,10);}
+    else if(e.type==='stick') fx.push({k:'block',x:e.x/FX,y:e.y/FX,t:0,max:12});
+    else if(e.type==='armor'){fx.push({k:'block',x:e.x/FX,y:e.y/FX,t:0,max:14}); fx.push({k:'label',x:e.x/FX,y:e.y/FX-50,t:0,max:35,s:'アーマー'});}
+    else if(e.type==='tele') fx.push({k:'block',x:e.x/FX,y:e.y/FX-80,t:0,max:14});
+    else if(e.type==='rc'){fx.push({k:'rc',x:e.x/FX,y:e.y/FX-80,t:0,max:18,c:COLP(e.i).light}); shake=Math.max(shake,5);}
   }
   S.events.length=0;
 }
@@ -212,7 +344,7 @@ function text(str,x,y,size,color,align='center',stroke=true){
 }
 
 function drawFighter(p){
-  const c=COL[p.i], st=p.state, m=p.move?MOVES[p.move]:null;
+  const c=colOf(p), st=p.state, m=p.move?MV(p):null, look=CHARS[p.ch].look, bulk=(CHARS[p.ch].bulk||100)/100;
   ctx.save();
   ctx.translate(p.x/FX,p.y/FX); ctx.scale(p.facing,1);
   // 影
@@ -223,6 +355,7 @@ function drawFighter(p){
   if(st==='getup') ctx.globalAlpha=(S.frame>>1)%2?0.45:0.9;
   if(m&&m.super){ctx.shadowColor=c.light; ctx.shadowBlur=30;}
   if(m&&m.inv&&p.mf>=m.inv[0]&&p.mf<=m.inv[1]){ctx.shadowColor='#fff'; ctx.shadowBlur=18;}
+  ctx.save(); ctx.scale(bulk,1); // 体格（太さ）はここだけに効かせる。手足の長さ＝判定は変えない
   ctx.fillStyle=body;
   let head=null;
   if((st==='down'||st==='ko')&&!p.air){rr(-50,-24,95,24); circle(-64,-14,15);}
@@ -235,29 +368,49 @@ function drawFighter(p){
     ctx.fillStyle=body; rr(-26,-134,52,66); head=[2,-152,18];
   }
   if(head){
-    circle(head[0],head[1],head[2]);
-    ctx.fillStyle=c.light; rr(head[0]-head[2],head[1]-6,head[2]*2,6,2);
-    ctx.beginPath(); ctx.moveTo(head[0]-head[2],head[1]-4); ctx.lineTo(head[0]-head[2]-18,head[1]-10+Math.sin(S.frame/5)*3); ctx.lineTo(head[0]-head[2]-14,head[1]+2); ctx.fill();
-    ctx.fillStyle='#fff'; rr(head[0]+8,head[1]-1,7,4,1);
+    const [hx,hy,hr]=head, wave=Math.sin((S.frame+selT*2)/5)*3;
+    circle(hx,hy,hr);
+    if(look==='bald'){ // ひげ
+      ctx.fillStyle=c.dark; rr(hx-hr+3,hy+4,hr*2-6,hr-2,5);
+    }else if(look==='hat'){ // とんがり帽子
+      ctx.fillStyle=c.dark; ctx.beginPath(); ctx.moveTo(hx-hr-8,hy-8); ctx.lineTo(hx+hr+8,hy-8); ctx.lineTo(hx-4+wave,hy-hr-34); ctx.fill();
+      ctx.fillStyle=c.light; rr(hx-hr-8,hy-11,hr*2+16,6,2);
+    }else{
+      ctx.fillStyle=c.light; rr(hx-hr,hy-6,hr*2,6,2); // はちまき
+      const len=look==='tail'?46:18;
+      ctx.beginPath(); ctx.moveTo(hx-hr,hy-4); ctx.lineTo(hx-hr-len,hy-10+wave+(look==='tail'?26:0)); ctx.lineTo(hx-hr-len+4,hy+2+(look==='tail'?22:0)); ctx.fill();
+      if(look==='spiky'){ctx.fillStyle=c.dark; for(let k=-1;k<=1;k++){ctx.beginPath(); ctx.moveTo(hx+k*10-7,hy-hr+3); ctx.lineTo(hx+k*10+7,hy-hr+3); ctx.lineTo(hx+k*12-3,hy-hr-13); ctx.fill();}}
+    }
+    ctx.fillStyle='#fff'; rr(hx+8,hy-1,7,4,1);
   }
+  ctx.restore();
   // 手足（攻撃）
   ctx.shadowBlur=0;
+  const blade=look==='sword'&&!p.noSword;
   if(m&&m.box){
-    const [bx,by,bw,bh]=m.box, act=p.mf>=m.s&&p.mf<m.s+m.a;
-    ctx.fillStyle=act?c.light:body;
-    if(bh>bw){ // 縦長（昇竜など）
-      if(act) rr(bx+bw/2-12,-(by+bh),24,bh); else rr(4,-120,22,30);
+    const [bx,by,bw,bh]=moveBox(p,m), act=p.mf>=m.s&&p.mf<m.s+m.a, steel=m.sword&&blade;
+    ctx.fillStyle=steel?'#f4f7ff':(act?c.light:body);
+    if(m.beam){ // ビーム
+      if(act){const g=ctx.createLinearGradient(0,-(by+bh),0,-by); g.addColorStop(0,'rgba(255,255,255,0)'); g.addColorStop(.5,'#fff'); g.addColorStop(1,'rgba(255,255,255,0)');
+        ctx.fillStyle=c.light; ctx.globalAlpha=.6; ctx.fillRect(bx,-(by+bh)-14,bw,bh+28); ctx.globalAlpha=1; ctx.fillStyle=g; ctx.fillRect(bx,-(by+bh),bw,bh);}
+      ctx.fillStyle=c.light; rr(14,-118,34,22);
+    }else if(bh>bw){ // 縦長（昇竜など）
+      if(act) rr(bx+bw/2-(steel?6:12),-(by+bh),steel?12:24,bh); else rr(4,-120,22,30);
     }else{
-      const lh=Math.min(bh,22), ly=-(by+bh/2)-lh/2;
+      const lh=steel?Math.min(bh,10):Math.min(bh,22), ly=-(by+bh/2)-lh/2;
       if(act) rr(bx-10,ly,bw+10,lh);
-      else if(p.mf<m.s) rr(-14,ly,30,lh);
+      else if(p.mf<m.s) rr(-14,ly,30+(steel?40:0),lh);
       else rr(bx-10,ly,(bw+10)*0.55,lh);
-      if(act){ctx.fillStyle='#fff'; rr(bx+bw-18,ly,18,lh);}
+      if(act&&!steel){ctx.fillStyle='#fff'; rr(bx+bw-18,ly,18,lh);}
     }
   }else if(m&&m.proj&&p.mf>=m.s-5&&p.mf<m.s+10){
     ctx.fillStyle=c.light; rr(18,-112,46,22);
   }else if(head&&st!=='hitstun'&&!p.air){
     ctx.fillStyle=c.dark; rr(14,p.crouch?-84:-122,26,14); // 構えの腕
+  }
+  if(blade&&!(m&&m.sword)&&head&&st!=='hitstun'){ // 剣を構える（振っていないとき）
+    ctx.save(); ctx.translate(34,p.air?-100:(p.crouch?-78:-116)); ctx.rotate(-1.05);
+    ctx.fillStyle='#f4f7ff'; rr(0,-4,190,8,3); ctx.fillStyle=c.dark; rr(-6,-9,10,18,2); ctx.restore();
   }
   if(st==='blockstun'){
     ctx.strokeStyle='rgba(170,225,255,.9)'; ctx.lineWidth=4;
@@ -266,12 +419,37 @@ function drawFighter(p){
   ctx.restore();
 }
 function drawProj(q){
-  const x=q.x/FX,y=q.y/FX,c=COL[q.owner];
+  const x=q.x/FX,y=q.y/FX,c=COLP(q.owner),dir=q.vx<0?-1:1;
+  if(q.phase===2){ // 爆発
+    const k=1-q.life/8, R=q.w/2*(0.5+k*0.6);
+    const g=ctx.createRadialGradient(x,y,4,x,y,R); g.addColorStop(0,'#fff'); g.addColorStop(.4,'#ffd34d'); g.addColorStop(1,'rgba(255,90,40,0)');
+    ctx.fillStyle=g; circle(x,y,R); return;
+  }
+  if(q.kind==='sword'){
+    if(q.phase===1){ // 壁に刺さって点滅 → 爆発
+      const wallRight=q.x>W*FX/2, blink=q.fuse<20?(S.frame>>1)%2:(S.frame>>3)%2;
+      ctx.save(); ctx.translate(x,y); ctx.scale(wallRight?1:-1,1);
+      ctx.fillStyle=blink?'#ff6a4d':'#f4f7ff'; rr(-110,-4,116,8,3); ctx.fillStyle=c.dark; rr(-120,-9,10,18,2);
+      ctx.restore();
+      ctx.strokeStyle='rgba(255,120,60,.5)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(x,y,q.ex.w/2*(1-q.fuse/q.stick),0,Math.PI*2); ctx.stroke();
+    }else{
+      ctx.fillStyle='#f4f7ff'; rr(x-q.w/2,y-4,q.w,8,3);
+      ctx.fillStyle=c.dark; rr(x-dir*(q.w/2)-5,y-9,10,18,2);
+      ctx.fillStyle=c.light; ctx.globalAlpha=.3; rr(x-q.w/2-dir*50,y-3,q.w,6,3); ctx.globalAlpha=1;
+    }
+    return;
+  }
+  if(q.kind==='wave'){ // 地を這う
+    ctx.fillStyle=c.light; ctx.beginPath(); ctx.moveTo(x-dir*q.w*0.7,y+q.h/2); ctx.quadraticCurveTo(x+dir*q.w*0.2,y-q.h*1.1,x+dir*q.w*0.6,y+q.h/2); ctx.fill();
+    ctx.fillStyle='#fff'; ctx.globalAlpha=.7; ctx.beginPath(); ctx.moveTo(x-dir*q.w*0.3,y+q.h/2); ctx.quadraticCurveTo(x+dir*q.w*0.25,y-q.h*0.5,x+dir*q.w*0.5,y+q.h/2); ctx.fill(); ctx.globalAlpha=1;
+    return;
+  }
   const g=ctx.createRadialGradient(x,y,2,x,y,q.w*0.8);
   g.addColorStop(0,'#fff'); g.addColorStop(0.35,c.light); g.addColorStop(1,'rgba(0,0,0,0)');
   ctx.fillStyle=g; ctx.beginPath(); ctx.ellipse(x,y,q.w*0.8,q.h*0.7,0,0,Math.PI*2); ctx.fill();
+  if(q.kind==='orb'){ctx.strokeStyle=c.body; ctx.lineWidth=3; ctx.beginPath(); ctx.arc(x,y,q.w/2+4*Math.sin(S.frame/4),0,Math.PI*2); ctx.stroke(); return;}
   ctx.fillStyle=c.body; ctx.globalAlpha=.35;
-  ctx.beginPath(); ctx.ellipse(x-Math.sign(q.vx)*28,y,26,q.h*0.4,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+  ctx.beginPath(); ctx.ellipse(x-dir*28,y,26,q.h*0.4,0,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
 }
 function drawBox(r,fill,stroke){
   const x=r.x/FX,y=r.y/FX,w=r.w/FX,h=r.h/FX;
@@ -284,7 +462,7 @@ function drawBoxes(){
     const hb=activeBox(p); if(hb) drawBox(hb,'rgba(255,60,60,.35)','#ff4040');
     ctx.strokeStyle='#ffd34d'; ctx.beginPath(); ctx.moveTo(p.x/FX,p.y/FX-6); ctx.lineTo(p.x/FX,p.y/FX+6); ctx.stroke();
   }
-  for(const q of S.projs) drawBox({x:q.x-q.w*FX/2,y:q.y-q.h*FX/2,w:q.w*FX,h:q.h*FX},'rgba(255,60,60,.35)','#ff4040');
+  for(const q of S.projs) if(q.phase!==1) drawBox({x:q.x-q.w*FX/2,y:q.y-q.h*FX/2,w:q.w*FX,h:q.h*FX},'rgba(255,60,60,.35)','#ff4040');
 }
 function drawFx(){
   for(const f of fx){
@@ -318,12 +496,13 @@ function drawHUD(){
     hpDisp[i]=Math.max(p.hp,hpDisp[i]-(S.hitstop||S.freeze?0:5));
     if(p.hp>hpDisp[i]) hpDisp[i]=p.hp;
     ctx.fillStyle='#0a0a10'; ctx.fillRect(x0-3,25,w+6,28);
-    const fill=(v,col)=>{const ww=w*v/MAX_HP; ctx.fillStyle=col; ctx.fillRect(i===0?x0:x0+w-ww,28,ww,22);};
+    const maxHp=CHARS[p.ch].hp;
+    const fill=(v,col)=>{const ww=w*v/maxHp; ctx.fillStyle=col; ctx.fillRect(i===0?x0:x0+w-ww,28,ww,22);};
     fill(hpDisp[i],'#d23a3a');
-    fill(p.hp,p.hp<MAX_HP*0.25?'#ffb02e':'#ffe14d');
-    text(name(i),i===0?x0:x0+w,68,18,COL[i].light,i===0?'left':'right');
+    fill(p.hp,p.hp<maxHp*0.25?'#ffb02e':'#ffe14d');
+    text(i===0?name(i)+'  '+CHARS[p.ch].name:CHARS[p.ch].name+'  '+name(i),i===0?x0:x0+w,68,18,COLP(i).light,i===0?'left':'right');
     for(let k=0;k<WIN_ROUNDS;k++){
-      const cx=i===0?x0+110+k*22:x0+w-110-k*22;
+      const cx=i===0?x0+w-14-k*22:x0+14+k*22;
       ctx.fillStyle=k<S.wins[i]?'#ffd34d':'#2b2b38'; circle(cx,68,7);
     }
   }
@@ -348,7 +527,7 @@ function drawHUD(){
   if(showBoxes||S.mode==='training'){
     for(let i=0;i<2;i++){
       const p=S.p[i]; let s=p.state;
-      if(p.move){const m=MOVES[p.move]; const ph=p.mf<m.s?'発生':p.mf<m.s+m.a?'持続':'硬直'; s=`${m.name} ${p.mf}/${m.T}F ${ph}`;}
+      if(p.move){const m=MV(p); const ph=p.mf<m.s?'発生':p.mf<m.s+m.a?'持続':'硬直'; s=`${m.name} ${p.mf}/${m.T}F ${ph}`;}
       else if(p.state==='hitstun'||p.state==='blockstun') s+=` 残り${p.stun}F`;
       text(s,i===0?40:960,100,13,'#c9cbd6',i===0?'left':'right',true);
     }
@@ -370,7 +549,7 @@ function drawMessages(){
     const name=pname(S.matchWinner);
     ctx.fillStyle='rgba(0,0,0,.5)'; ctx.fillRect(0,0,W,H);
     text(`${name} の勝ち！`,500,240,68,'#ffd34d');
-    if(S.pt>60) text('攻撃ボタンでもう一戦',500,320,24,'#fff');
+    if(S.pt>60) text(S.mode==='online'?'攻撃ボタンでもう一戦':'攻撃ボタンでもう一戦　／　Esc でキャラ選択',500,320,22,'#fff');
   }
   if(S.mode==='online'){
     if(!net||!net.started){
@@ -380,7 +559,7 @@ function drawMessages(){
   }
   if(S.freeze>0){
     const p=S.p[S.freezeOwner];
-    text(MOVES.SU.name,p.x/FX,p.y/FX-210,34,COL[p.i].light);
+    text(MV(p,'SU').name,p.x/FX,p.y/FX-210,34,COLP(p.i).light);
   }
 }
 function render(){
@@ -403,6 +582,7 @@ function render(){
 const FRAME=1000/60; let acc=0,last=performance.now();
 function loop(now){
   acc+=Math.min(100,now-last); last=now;
+  if(sel){ selT+=0.5; acc=0; renderSelect(); requestAnimationFrame(loop); return; }
   let n=0;
   while(acc>=FRAME&&n<5){
     if(S.mode==='online'){
@@ -414,7 +594,7 @@ function loop(now){
     const inp=humanInputs();
     if(S.mode==='cpu') inp[1]=aiInput(S,1);
     else if(S.mode==='training') inp[1]=dummyInput(S);
-    if(S.phase==='end'&&S.pt>60&&((inp[0]|inp[1])&(BT.L|BT.M|BT.H|BT.SP|BT.SU))){setMode(S.mode);}
+    if(S.phase==='end'&&S.pt>60&&((inp[0]|inp[1])&(BT.L|BT.M|BT.H|BT.SP|BT.SU))){restart();}
     step(S,inp); takeEvents();
     acc-=FRAME; n++;
   }
@@ -423,5 +603,5 @@ function loop(now){
   render();
   requestAnimationFrame(loop);
 }
-cv.focus();
+setMode('cpu');
 requestAnimationFrame(loop);
