@@ -140,7 +140,7 @@ function spawnProj(s,p,m){
   const j=m.proj;
   if(s.projs.filter(q=>q.owner===p.i&&q.src===m.id).length>=(j.max||1)) return;
   s.projs.push({owner:p.i,src:m.id,kind:j.kind||'ball',phase:0,x:p.x+p.facing*60*FX,y:p.y-j.y*FX,vx:j.vx*p.facing,vy:j.vy||0,
-    w:j.w,h:j.h,life:j.life,stick:j.stick||0,fuse:0,heavy:!!j.heavy,ex:j.ex||null,hitDone:false,
+    w:j.w,h:j.h,life:j.life,stick:j.stick||0,fuse:0,heavy:!!j.heavy,breaker:!!j.breaker,ex:j.ex||null,hitDone:false,
     canc:p.canc,name:m.name,dmg:j.dmg,hs:j.hs,bs:j.bs,guard:j.guard||'mid',kb:400,meter:30,special:true,kd:!!j.kd,dead:false});
 }
 // 刺さった剣を爆発させる（爆発は数フレームだけ当たり判定が出る）
@@ -248,7 +248,7 @@ function updateFighter(s,p,o){
 function onLand(s,p){
   switch(p.state){
     case 'jump': p.state='land'; p.t=3; p.vx=0; break;
-    case 'attack':{const m=MV(p); p.move=null; p.state='land'; p.t=m&&m.air?4:12; p.vx=0; break;}
+    case 'attack':{const m=MV(p); p.move=null; p.state='land'; p.t=m&&m.land?m.land:(m&&m.air?4:12); /* land=その技の着地硬直 */ p.vx=0; break;}
     case 'launch':
       p.vx=0; p.jug=0;
       if(p.hp<=0&&s.mode!=='training'){p.state='ko';}
@@ -282,7 +282,7 @@ function pushApart(s){
     if(wallA){b.x-=sA*o; clampX(b);} else {a.x+=sA*o; clampX(a);}
   }
 }
-const projDir=(q,d)=>q.vx>0?1:(q.vx<0?-1:(d.x>=q.x?1:-1));
+const projDir=(q,d)=>q.vx>0?1:(q.vx<0?-1:(d.x>=q.x?1:-1)); // 当たったときに押される向き
 function updateProjs(s){
   for(const q of s.projs){
     if(q.phase===1){ if(--q.fuse<=0) explode(s,q); continue; }   // 刺さって待機中
@@ -298,7 +298,8 @@ function updateProjs(s){
   for(let i=0;i<live.length;i++)for(let j=i+1;j<live.length;j++){
     const A=live[i],B=live[j];
     if(A.owner!==B.owner&&Math.abs(A.x-B.x)<(A.w+B.w)*FX/2&&Math.abs(A.y-B.y)<(A.h+B.h)*FX/2){
-      if(A.heavy===B.heavy) A.dead=B.dead=true; else if(A.heavy) B.dead=true; else A.dead=true; // 重い弾は普通の弾を消して進む
+      // 重い弾は普通の弾を消して進む。ただし breaker の弾は重い弾とも相殺する
+      if(A.heavy===B.heavy||(A.heavy?B.breaker:A.breaker)) A.dead=B.dead=true; else if(A.heavy) B.dead=true; else A.dead=true;
       s.events.push({type:'clash',x:(A.x+B.x)>>1,y:A.y});
     }
   }
@@ -307,7 +308,8 @@ function canBlock(d,a,guard,proj){
   if(d.air) return false;
   if(!(d.state==='idle'||d.state==='walk'||d.state==='crouch'||d.state==='blockstun')) return false;
   const inp=d.curIn;
-  const away=proj?(projDir(proj,d)>0?BT.RIGHT:BT.LEFT):(a.x>d.x?BT.LEFT:BT.RIGHT);
+  // 動いている弾は進行方向の逆、止まっている爆発は撃った相手の逆（どちらも普通の後ろ入れでガードできる）
+  const away=proj&&proj.vx!==0?(proj.vx>0?BT.RIGHT:BT.LEFT):(a.x>d.x?BT.LEFT:BT.RIGHT);
   if(!(inp&away)) return false;
   const crouching=!!(inp&BT.DOWN);
   if(guard==='low'&&!crouching) return false;

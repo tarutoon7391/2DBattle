@@ -7,7 +7,8 @@
 //   kd=ダウンを奪う  lift=浮かせる（追撃2回まで）  jc=当たったらジャンプでキャンセル可
 //   rehit=nフレームごとに多段ヒット  moveVx=[開始F,終了F,速度] 前進  rise=飛び上がる  lv=[縦,横] 浮かせ方の指定
 //   throw=投げ（ガード不可） notech=投げ抜け不可  armor=[開始F,終了F] 1発耐える  inv=[開始F,終了F] 無敵
-//   proj=飛び道具（max=同時に出せる数 stick=壁に刺さってから爆発までのF ex=爆発 heavy=普通の弾を消して進む）
+//   proj=飛び道具（max=同時に出せる数 stick=壁に刺さってから爆発までのF ex=爆発 heavy=普通の弾を消して進む breaker=heavy の弾とも相殺）
+//   land=空中技の着地硬直
 //   sword=剣を使う技（剣を投げている間はリーチ45%・威力60%）  alt=剣を投げている間に化ける技
 'use strict';
 const BASE_MOVES={
@@ -99,7 +100,7 @@ const CHARS=[
       'jL':{s:3,r:3,dmg:30,chain:1,cancel:true},
       'jM':{s:5,dmg:48,chain:2,cancel:true},
       'jH':{s:7,dmg:70,chain:3,cancel:true},
-      'jS':{...SP,name:'急降下蹴り',s:6,a:20,r:6,dmg:60,hs:20,bs:12,box:[0,-20,60,60],air:true,dive:{vy:1400,vx:700},meter:40},
+      'jS':{...SP,name:'急降下蹴り',s:6,a:20,r:6,dmg:60,hs:20,bs:12,box:[0,-20,60,60],air:true,dive:{vy:1400,vx:700},meter:40,land:18}, // 着地硬直が長く、当てても着地から技につながらない
       'TH':{dmg:100},
       'spN':{...SP,name:'連掌',s:6,a:13,r:18,dmg:28,rehit:4,hs:18,bs:12,box:[15,80,85,50],kb:150,meter:25},
       'spD':{...SP,name:'滑り蹴り',s:7,a:10,r:18,dmg:60,guard:'low',kd:true,bs:12,box:[0,0,85,22],crouch:true,moveVx:[7,16,1000]},
@@ -141,7 +142,7 @@ const CHARS=[
       '2H':{s:11,dmg:75},
       '6H':{name:'突き放し',s:13,r:20,dmg:70,guard:'mid',kb:1300,box:[20,70,100,60]},
       'jH':{dmg:80},
-      'spN':{...SP,name:'光弾',s:10,a:1,r:24,meter:15,proj:{kind:'ball',vx:1000,dmg:55,hs:18,bs:13,w:36,h:26,y:105,life:110,max:2}},
+      'spN':{...SP,name:'光弾',s:10,a:1,r:24,meter:15,proj:{kind:'ball',vx:1000,dmg:55,hs:18,bs:13,w:36,h:26,y:105,life:110,max:2,breaker:true}}, // ツルギの投剣とも相殺できる
       'spD':{...SP,name:'地這い（下段）',s:13,a:1,r:28,meter:20,proj:{kind:'wave',vx:650,dmg:60,hs:19,bs:13,w:60,h:30,y:15,life:140,guard:'low'}},
       'spU':{...SP,name:'対空弾',s:9,a:1,r:28,meter:20,proj:{kind:'ball',vx:700,vy:-700,dmg:70,hs:0,bs:14,w:40,h:40,y:130,life:60,kd:true}},
       'spF':{...SP,name:'重光球',s:18,a:1,r:30,meter:25,proj:{kind:'orb',vx:260,dmg:90,hs:24,bs:18,w:70,h:70,y:95,life:260,heavy:true}},
